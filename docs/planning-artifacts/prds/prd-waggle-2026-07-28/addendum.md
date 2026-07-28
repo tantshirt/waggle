@@ -1,6 +1,6 @@
 ---
 title: "PRD Addendum: waggle"
-status: draft
+status: final
 created: 2026-07-28
 updated: 2026-07-28
 ---
