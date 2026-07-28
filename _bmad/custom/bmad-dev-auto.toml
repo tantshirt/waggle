@@ -1,0 +1,25 @@
+# Team overrides for waggle. Committed; the installer never touches this file.
+# Arrays APPEND to the skill's defaults (base -> team -> user).
+
+[workflow]
+
+# Every dev-loop invocation carries the binding constraints, not just the story.
+# project-context.md is already a default; these add the authorities behind it.
+persistent_facts = [
+  "file:{project-root}/docs/planning-artifacts/architecture/spine-waggle-2026-07-28/ARCHITECTURE-SPINE.md",
+  "file:{project-root}/docs/planning-artifacts/epics.md",
+  "file:{project-root}/docs/upstream-issues.md",
+  "waggle is a DISTRIBUTION. The Buzz checkout at vendor/buzz/ is external and immutable -- never write to it. Anything that would require a Buzz change goes in docs/upstream-issues.md and is left unimplemented.",
+  "The BMAD installation under _bmad/ and .claude/skills/ is read-only input. Write only to _bmad/custom/ and waggle's own output directory.",
+  "Never print, log, commit, or return an nsec. Secret key material stays inside the identity adapter in a type with no Debug or Display.",
+  "The architecture spine's AD-1..AD-20 are binding. If a task seems to require violating one, stop and surface the conflict rather than working around it.",
+  "Commit messages are conventional commits and explain why, not just what.",
+]
+
+# Loop contract: stop after each story. Never start the next one unprompted.
+on_complete = [
+  "Update docs/implementation-artifacts/sprint-status.yaml: set this story to its achieved status and set its epic to in-progress if it was backlog.",
+  "Stage all changes and commit with a conventional-commit message naming the story id and what it delivered.",
+  "Push to origin main.",
+  "STOP. Report the story outcome, what is now verifiably working, and the single next action. Do not begin the next story until the user says so.",
+]
