@@ -333,3 +333,96 @@ nice-to-have.
 | **O-4** | Compiler shells out to `resolve_customization.py`, or ports the merge? | Architecture doc |
 | **O-5** | How do we track upstream `WF-08` so gates become durable when it lands? | `upstream-issues.md` + gate interface design |
 | **O-6** | Local Rust is 1.79.0; Buzz needs 1.88+. Does Hermit fully cover this? | Story 1.1 |
+
+---
+
+## 6. Corrections from Story 1.1 (2026-07-28)
+
+The walking skeleton put the research above in contact with the real substrate. Four things
+we asserted were wrong, and one mapping turned out far better than assumed. Recorded here
+rather than silently edited, because the *reason* we got them wrong is reusable.
+
+### 6.1 The persona pack schema is documented — we missed it `[BUZZ]`
+
+**We said:** undocumented upstream (O-1, UP-04), "the largest unknown in the plan."
+
+**Reality:** `crates/buzz-persona/PERSONA_PACK_SPEC.md` is a complete 16-section
+specification. Our research pass read repo-root docs (`README`, `ARCHITECTURE`, `NOSTR`,
+`VISION_*`) and *listed* crate names without opening in-crate documentation.
+
+**Method lesson:** for a Rust workspace, in-crate `*.md` is first-class documentation. Grep
+the whole tree for docs before declaring anything undocumented.
+
+**What the spec actually gives us:**
+
+| Concept | Detail |
+|---|---|
+| Pack format | Superset of the [Open Plugin Spec](https://open-plugin-spec.org) — every valid pack is a valid OPS package |
+| Manifest | `.plugin/plugin.json` — `personas[]`, `defaults{}`, `pack_instructions`, `mcp_config`, `hooks_config` |
+| Persona file | `agents/<name>.persona.md` — YAML frontmatter (identity + behavioral config) + markdown body as the persona prompt |
+| Required persona fields | `name`, `display_name`, `description` |
+| Behavioral config | `subscribe`, `triggers{mentions,keywords,all_messages}`, `model`, `temperature`, `max_context_tokens`, `thread_replies`, `broadcast_replies` |
+| Precedence | 5 levels: operator env > desktop UI > persona frontmatter > pack defaults > built-in |
+| Merge semantics | **Shallow replacement.** Objects and arrays replace whole; no deep merge, no sub-key inheritance |
+| Null semantics | `null` = absent (falls through); `[]` / `{}` = present (overrides) |
+| Skills | `skills/<name>/SKILL.md`, **`name:` and `description:` both required**, silently skipped if malformed |
+| Validation | `buzz pack validate` exists and is implemented |
+| Distribution | `.buzzpack` zip with a **mandatory** `.sha256`; git installs; `pack.lock` |
+
+### 6.2 The BMAD → Buzz mapping is much closer than the architecture assumed `[WAGGLE]`
+
+The single most consequential finding. BMAD skills and Buzz pack skills are **the same
+format**: `SKILL.md` with required `name:` and `description:` frontmatter. BMAD installs to
+`.claude/skills/<id>/SKILL.md`; the pack spec's own skill discovery list includes
+`$AGENT_CWD/.claude/skills/<skill-name>/SKILL.md`.
+
+So the "compiler" is a smaller transform than the PRD imagined — closer to a manifest
+generator plus a directory copy than a translator:
+
+| BMAD | Buzz pack |
+|---|---|
+| module | one pack |
+| `[agents.<id>]` descriptor + `customize.toml` `[agent]` | `agents/<id>.persona.md` frontmatter |
+| `role` + `identity` + `communication_style` + `principles` | persona markdown body |
+| `.claude/skills/<id>/SKILL.md` | `skills/<id>/SKILL.md` — **already compatible** |
+| menu item → `skill` | a skill in the pack |
+| menu item → `prompt` | text in the persona body (confirms AD-7) |
+
+This *reduces* scope and strengthens SM-C1: there is even less excuse for module-specific
+compiler branches.
+
+### 6.3 Signatures are not readable through `buzz-cli` `[BUZZ]`
+
+Reads are sig-stripped in every format, with no opt-in flag. FR-22's independent
+verifiability cannot be built on the CLI. See **UP-07**; this is the finding with the
+largest architectural consequence.
+
+### 6.4 Toolchain: the pin is 1.95.0, and Hermit supplies it `[BUZZ]`
+
+`README.md` says Rust 1.88+; `rust-toolchain.toml` pins **1.95.0**. The pin wins. Hermit
+provides cargo 1.95.0, Node 24.14.0, pnpm 11.4.0, `just` 1.46.0 — so a machine with
+`rustc 1.79.0` builds Buzz fine. **OQ-6 resolved; contributors need no system upgrade.**
+
+### 6.5 Channel templates already exist upstream `[BUZZ]`
+
+`buzz channels create --template <name>` "supplies default type/visibility/description/canvas,
+and resolves its agent roster against the relay to add as members," reading a
+`channel-templates.json`. Deliverable 2 (channel and canvas templates, FR-10/FR-25/FR-26)
+may be substantially *configuration of an existing feature* rather than new construction.
+Worth investigating before Epic 2 estimates are trusted.
+
+### 6.6 Smaller corrections
+
+- **`buzz-admin`** provides `generate-key`, `add-member`, `remove-member`, `list-members` —
+  FR-11/FR-12's provisioning procedure exists and is documented in CLI help.
+- **The pubkey allowlist is off by default**, so a fresh keypair can authenticate via NIP-42
+  and publish without registration. `add-member` requires `BUZZ_RELAY_PRIVATE_KEY`.
+- **`buzz-cli` exit codes** are `0=ok 1=input 2=relay/network 3=auth 4=other 5=write conflict`
+  — a concrete precedent for AD-20's taxonomy.
+- **`--format compact` is a global flag**, before the subcommand.
+- **Relay queries must include explicit `kinds`** or hit the p-gate with 403.
+- **Crates we had not catalogued:** `sprig` (all-in-one ACP + agent + dev-MCP harness),
+  `buzz-conformance`, `buzz-relay-mesh`, `buzz-pair-relay`, `buzz-ws-client`.
+- **AD-2 clarification:** `.env` is gitignored *by Buzz itself*, so editing it is
+  configuration, not modification. The enforceable invariant is "no **tracked** file
+  modified" — `git status --porcelain` empty.
