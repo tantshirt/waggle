@@ -1,0 +1,21 @@
+[package]
+name = "waggle-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "The waggle command line. The only crate that wires the others."
+
+[[bin]]
+name = "waggle"
+path = "src/main.rs"
+
+[dependencies]
+waggle-core = { workspace = true }
+waggle-method = { workspace = true }
+waggle-hive = { workspace = true }
+clap = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }

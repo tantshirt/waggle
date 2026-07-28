@@ -306,7 +306,7 @@ Seed. Verified current at authoring, 2026-07-28.
 
 | Name | Version |
 |---|---|
-| Rust toolchain | 1.97.1 (pinned via `rust-toolchain.toml`) |
+| Rust toolchain | 1.95.0 (pinned via `rust-toolchain.toml`) — matched to the substrate's own pin so one toolchain serves both |
 | `nostr` | 0.44.6 |
 | `nostr-sdk` | 0.44.1 |
 | `clap` | 4.6.4 |

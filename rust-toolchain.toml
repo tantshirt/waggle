@@ -1,0 +1,6 @@
+# Pinned to match the substrate's own toolchain (vendor/buzz/rust-toolchain.toml),
+# so contributors need exactly one Rust toolchain for the repo and the substrate.
+[toolchain]
+channel = "1.95.0"
+profile = "default"
+components = ["rustfmt", "clippy"]

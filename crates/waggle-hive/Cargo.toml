@@ -1,0 +1,12 @@
+[package]
+name = "waggle-hive"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Adapter for the Buzz substrate. Never modifies it (AD-2)."
+
+[dependencies]
+waggle-core = { workspace = true }
+thiserror = { workspace = true }

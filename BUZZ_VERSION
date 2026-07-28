@@ -1,12 +1,23 @@
 # Pinned upstream versions targeted by this distribution.
 # Waggle self-hosts stock Buzz from upstream. We never fork or vendor it.
+#
+# AD-18: the supported RANGE lives here and nowhere else. waggle refuses to operate
+# outside it rather than degrading unpredictably. NFR-5: no floating versions anywhere.
+# Parsed by waggle-core::pins; a test asserts this file always parses.
 
+# --- Buzz substrate ---
 BUZZ_VERSION=v0.4.26
+BUZZ_SUPPORTED=>=0.4.0,<0.5.0
 BUZZ_REPO=https://github.com/block/buzz
 
+# --- BMAD Method installation ---
 BMAD_METHOD_VERSION=6.10.0
+BMAD_SUPPORTED=>=6.10.0,<7.0.0
 
-# Toolchains (must match what upstream Buzz requires; see Buzz README)
-RUST_VERSION=1.88
+# --- Toolchains ---
+# waggle pins the same Rust as the substrate's rust-toolchain.toml, so contributors
+# need exactly one toolchain. Note Buzz's Cargo.toml states rust-version = 1.88.0 --
+# that is its MSRV, not its pinned dev toolchain. The pin wins.
+RUST_VERSION=1.95.0
 NODE_VERSION=24
 PNPM_VERSION=10
