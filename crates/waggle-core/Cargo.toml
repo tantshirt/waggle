@@ -9,3 +9,5 @@ description = "waggle domain types and pure transforms. Zero I/O (AD-1)."
 
 [dependencies]
 serde = { workspace = true }
+toml = { workspace = true }
+thiserror = { workspace = true }

@@ -1,18 +1,17 @@
 [package]
-name = "waggle-method"
+name = "waggle-emit"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Adapter for reading a BMAD Method installation. Read-only (AD-3)."
+description = "Renders compiled persona packs to disk. Deterministic (AD-4)."
 
 [dependencies]
 waggle-core = { workspace = true }
 serde = { workspace = true }
-serde_norway = { workspace = true }
+serde_json = { workspace = true }
 thiserror = { workspace = true }
-toml = { workspace = true }
 
 [dev-dependencies]
-serde_json = { workspace = true }
+toml = { workspace = true }

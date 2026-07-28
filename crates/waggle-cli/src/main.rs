@@ -69,6 +69,24 @@ enum Command {
     /// Manage agent identities — one Nostr keypair per method role.
     #[command(subcommand)]
     Identity(IdentityCmd),
+
+    /// Compile a method module into a Buzz persona pack.
+    ///
+    /// Reads the installation (read-only, AD-3), resolves the agent descriptor across all
+    /// three override layers (AD-5), and emits a pack. Deterministic (AD-4).
+    Compile {
+        /// Module code, e.g. `tea`.
+        #[arg(long)]
+        module: String,
+
+        /// Agent id to compile, e.g. `bmad-tea`.
+        #[arg(long)]
+        agent: String,
+
+        /// Output directory. Defaults to `<root>/packs`.
+        #[arg(long)]
+        out: Option<PathBuf>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -174,7 +192,133 @@ fn main() -> ExitCode {
             run_preflight(&root, &substrate_path, allow_unsupported, cli.format)
         }
         Command::Identity(ref cmd) => run_identity(&root, cmd, cli.format),
+        Command::Compile {
+            ref module,
+            ref agent,
+            ref out,
+        } => {
+            let out_dir = out.clone().unwrap_or_else(|| root.join("packs"));
+            run_compile(&root, module, agent, &out_dir, cli.format)
+        }
     }
+}
+
+#[derive(Serialize)]
+struct CompileOutput {
+    module: String,
+    agent: String,
+    pack_dir: String,
+    files_written: Vec<String>,
+    skills_copied: Vec<String>,
+    report: waggle_core::CompileReport,
+}
+
+fn run_compile(
+    root: &std::path::Path,
+    module: &str,
+    agent: &str,
+    out_dir: &std::path::Path,
+    format: Format,
+) -> ExitCode {
+    // AD-19: resolve the tool directory from the installation manifest, never hard-coded.
+    let installation = match waggle_method::detect(root) {
+        Ok(i) => i,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::from(exit::UPSTREAM);
+        }
+    };
+
+    let tool_dirs = waggle_method::descriptors::tool_dirs(&installation.ides);
+    let Some(tool_dir) = tool_dirs.first() else {
+        eprintln!(
+            "error: the installation manifest records no tool directories, so agent \
+             bodies cannot be located"
+        );
+        return ExitCode::from(exit::UPSTREAM);
+    };
+
+    let module_version = installation
+        .modules
+        .iter()
+        .find(|m| m.name == module)
+        .map(|m| m.version_raw.clone())
+        .unwrap_or_else(|| {
+            eprintln!("warning: module {module:?} is not in the installation manifest");
+            "0.0.0".to_string()
+        });
+
+    let descriptor = match waggle_method::descriptors::resolve_agent(root, tool_dir, agent) {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::from(exit::UPSTREAM);
+        }
+    };
+
+    let description = format!("Compiled from the {module} module of a BMAD Method installation.");
+    let (pack, report) = match waggle_core::compile_persona(agent, &descriptor, &description) {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::from(exit::UPSTREAM);
+        }
+    };
+
+    let instructions = include_str!("../assets/instructions.md");
+    let meta = waggle_emit::PackMeta {
+        module,
+        module_version: &module_version,
+        skills_source: &root.join(tool_dir),
+        instructions,
+    };
+
+    let outcome = match waggle_emit::emit_pack(out_dir, &pack, &meta) {
+        Ok(o) => o,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::from(exit::SYSTEM);
+        }
+    };
+
+    let output = CompileOutput {
+        module: module.to_string(),
+        agent: agent.to_string(),
+        pack_dir: outcome.pack_dir.display().to_string(),
+        files_written: outcome
+            .files_written
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect(),
+        skills_copied: outcome.skills_copied,
+        report,
+    };
+
+    match format {
+        Format::Json => emit(format, "compile", true, &output),
+        Format::Text => {
+            println!("compiled {} -> {}", output.agent, output.pack_dir);
+            println!("  mapped       {}", output.report.mapped.join(", "));
+            println!("  skills       {} copied", output.skills_copied.len());
+            if !output.report.prompt_only.is_empty() {
+                println!(
+                    "  prompt-only  {} (carried into the persona body, no skill)",
+                    output.report.prompt_only.join(", ")
+                );
+            }
+            for d in &output.report.dropped {
+                println!("  dropped      {} — {}", d.field, d.reason);
+            }
+            if !output.report.unknown.is_empty() {
+                println!("  UNKNOWN      {}", output.report.unknown.join(", "));
+            }
+            for w in &output.report.warnings {
+                println!("  warning      {w}");
+            }
+        }
+    }
+
+    ExitCode::from(exit::OK)
 }
 
 #[derive(Serialize)]

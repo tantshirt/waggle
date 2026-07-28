@@ -4,8 +4,12 @@
 //! source. Everything here is a pure function over owned types, so it can be tested
 //! without a substrate, a method installation, or a network.
 
+pub mod compile;
+pub mod merge;
 pub mod pins;
 pub mod version;
 
+pub use compile::{compile_persona, CompileError, CompileReport, MenuItem, PersonaPack};
+pub use merge::{merge, merge_layers};
 pub use pins::{parse_pins, range};
 pub use version::{Compatibility, Version, VersionRange};

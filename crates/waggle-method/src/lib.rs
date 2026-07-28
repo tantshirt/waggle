@@ -3,6 +3,8 @@
 //! **AD-3: the installation is read-only.** Nothing here writes. waggle's own settings
 //! belong in `_bmad/custom/`, which the installer never regenerates.
 
+pub mod descriptors;
+
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
@@ -32,6 +34,12 @@ pub enum MethodError {
         "method manifest at {path} reports version {raw:?}, which is not a version we understand"
     )]
     UnparseableVersion { path: PathBuf, raw: String },
+
+    #[error("could not parse TOML at {path}: {reason}")]
+    UnparseableToml { path: PathBuf, reason: String },
+
+    #[error("{path} has no [agent] block — this is an agent descriptor, so one is required")]
+    MissingAgentBlock { path: PathBuf },
 }
 
 /// The installer-generated manifest at `_bmad/_config/manifest.yaml`.
@@ -43,6 +51,9 @@ struct Manifest {
     installation: Installation,
     #[serde(default)]
     modules: Vec<ManifestModule>,
+    /// Tool directories BMAD materialized skill bodies into (AD-19).
+    #[serde(default)]
+    ides: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -78,6 +89,8 @@ pub struct MethodInstallation {
     pub version: Version,
     pub version_raw: String,
     pub modules: Vec<InstalledModule>,
+    /// Tool ids from the manifest. Resolve to directories with [`descriptors::tool_dirs`].
+    pub ides: Vec<String>,
 }
 
 /// Path of the manifest relative to the project root.
@@ -129,6 +142,7 @@ pub fn detect(project_root: &Path) -> Result<MethodInstallation, MethodError> {
         version,
         version_raw,
         modules,
+        ides: manifest.ides,
     })
 }
 

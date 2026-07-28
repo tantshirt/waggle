@@ -42,7 +42,11 @@ neg() { # <label> <mutation-command>
 }
 
 neg "missing required display_name" "perl -pi -e 's/^display_name: .*\$//' agents/*.persona.md"
-neg "unknown frontmatter key"       "perl -pi -e 's/^thread_replies: true\$/thread_replies: true\ntemprature: 0.5/' agents/*.persona.md"
+# Anchor the mutation on `name:`, which every persona must have by definition. Anchoring
+# on an optional field silently no-ops when the pack shape changes, and the check then
+# passes for the wrong reason -- which is exactly what happened when the hand-built pack
+# was replaced by compiler output.
+neg "unknown frontmatter key"       "perl -pi -e 's/^(name: .*)\$/\$1\ntemprature: 0.5/' agents/*.persona.md"
 neg "persona file listed but absent" "rm agents/*.persona.md"
 
 # --- BMAD/Buzz skill format compatibility ---

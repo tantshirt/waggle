@@ -1,17 +1,11 @@
 {
   "$schema": "https://open-plugin-spec.org/schema/v1/plugin.json",
   "id": "dev.waggle.pack.tea",
-  "name": "waggle \u2014 Test Architect (TEA)",
-  "version": "0.1.0",
-  "description": "Test Architect agent compiled from a BMAD Method TEA module installation. Compatible with the BMAD Method; not affiliated with BMad Code, LLC.",
+  "name": "waggle — tea",
+  "version": "1.19.1",
+  "description": "Compiled from the tea module of a BMAD Method installation.",
   "author": "The waggle contributors",
   "license": "Apache-2.0",
-  "homepage": "https://github.com/tantshirt/waggle",
-  "keywords": [
-    "waggle",
-    "test-architecture",
-    "quality-gates"
-  ],
   "personas": [
     "agents/bmad-tea.persona.md"
   ],

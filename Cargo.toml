@@ -4,6 +4,7 @@ members = [
   "crates/waggle-core",
   "crates/waggle-method",
   "crates/waggle-hive",
+  "crates/waggle-emit",
   "crates/waggle-cli",
 ]
 
@@ -18,7 +19,9 @@ repository = "https://github.com/tantshirt/waggle"
 waggle-core = { path = "crates/waggle-core" }
 waggle-method = { path = "crates/waggle-method" }
 waggle-hive = { path = "crates/waggle-hive" }
+waggle-emit = { path = "crates/waggle-emit" }
 serde = { version = "1.0.229", features = ["derive"] }
+toml = "1.1.3"
 serde_json = "1.0"
 serde_norway = "0.9.42"
 clap = { version = "4.6", features = ["derive"] }
