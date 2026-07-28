@@ -108,6 +108,28 @@ enum IdentityCmd {
 
     /// List provisioned identities. Public data only.
     List,
+
+    /// Publish an agent's profile to the hive under its own key (FR-14).
+    ///
+    /// Reads display name and description from a compiled pack, so the hive shows what
+    /// the method descriptor says rather than something hand-maintained.
+    PublishProfile {
+        /// Role whose identity signs the profile.
+        #[arg(long)]
+        role: String,
+
+        /// Compiled pack directory, e.g. `packs/tea`.
+        #[arg(long)]
+        pack: PathBuf,
+
+        /// Relay base URL.
+        #[arg(long, default_value = "http://localhost:3000")]
+        relay: String,
+
+        /// Path to the substrate CLI. Defaults to the vendored release build.
+        #[arg(long)]
+        buzz_cli: Option<PathBuf>,
+    },
 }
 
 /// One versioned envelope shared by every command (AD-20 consistency convention).
@@ -405,7 +427,77 @@ fn run_identity(root: &std::path::Path, cmd: &IdentityCmd, format: Format) -> Ex
             }
             ExitCode::from(exit::OK)
         }
+        IdentityCmd::PublishProfile {
+            role,
+            pack,
+            relay,
+            buzz_cli,
+        } => {
+            let (display_name, description) = match read_pack_persona(pack) {
+                Ok(p) => p,
+                Err(e) => {
+                    eprintln!("error: {e}");
+                    return ExitCode::from(exit::USER);
+                }
+            };
+            let cli_path = buzz_cli
+                .clone()
+                .unwrap_or_else(|| root.join("vendor/buzz/target/release/buzz"));
+
+            match waggle_hive::identity::publish_profile(
+                root,
+                role,
+                &cli_path,
+                relay,
+                &display_name,
+                &description,
+            ) {
+                Ok(out) => {
+                    println!("{out}");
+                    ExitCode::from(exit::OK)
+                }
+                Err(e) => {
+                    eprintln!("error: {e}");
+                    ExitCode::from(exit::UPSTREAM)
+                }
+            }
+        }
     }
+}
+
+/// Pull `display_name` and `description` out of a compiled pack's persona frontmatter.
+///
+/// Deliberately minimal: enough to publish a profile, not a general YAML parser.
+fn read_pack_persona(pack: &std::path::Path) -> Result<(String, String), String> {
+    let agents = pack.join("agents");
+    let entry = std::fs::read_dir(&agents)
+        .map_err(|e| format!("cannot read {}: {e}", agents.display()))?
+        .filter_map(Result::ok)
+        .find(|e| e.file_name().to_string_lossy().ends_with(".persona.md"))
+        .ok_or_else(|| format!("no .persona.md found in {}", agents.display()))?;
+
+    let text = std::fs::read_to_string(entry.path())
+        .map_err(|e| format!("cannot read {}: {e}", entry.path().display()))?;
+
+    // Frontmatter only: stop at the closing delimiter so body text cannot masquerade
+    // as a field.
+    let frontmatter: Vec<&str> = text
+        .lines()
+        .skip(1)
+        .take_while(|l| l.trim() != "---")
+        .collect();
+
+    let field = |key: &str| -> Option<String> {
+        frontmatter.iter().find_map(|l| {
+            l.strip_prefix(&format!("{key}: "))
+                .map(|v| v.trim().trim_matches('"').replace("\\\"", "\""))
+        })
+    };
+
+    Ok((
+        field("display_name").ok_or("persona frontmatter has no display_name")?,
+        field("description").unwrap_or_default(),
+    ))
 }
 
 fn run_preflight(

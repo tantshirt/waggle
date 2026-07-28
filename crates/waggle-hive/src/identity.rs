@@ -226,6 +226,68 @@ pub fn list(project_root: &Path) -> Vec<AgentIdentity> {
     out
 }
 
+/// Publish an agent's profile (kind:0) to the hive under its own key (FR-14).
+///
+/// **AD-14 boundary:** the secret is read here, inside the adapter, and handed to the
+/// substrate CLI through the child process environment. It is never returned to the
+/// caller, never logged, and never placed on a command line where `ps` could see it.
+///
+/// **AD-2:** this goes through `buzz-cli`, a published substrate interface, rather than
+/// reimplementing event signing.
+pub fn publish_profile(
+    project_root: &Path,
+    role: &str,
+    buzz_cli: &Path,
+    relay_url: &str,
+    display_name: &str,
+    about: &str,
+) -> Result<String, IdentityError> {
+    validate_role(role)?;
+    let sec_path = secret_path(project_root, role);
+    if !sec_path.exists() {
+        return Err(IdentityError::NotProvisioned {
+            role: role.to_string(),
+        });
+    }
+
+    let secret = fs::read_to_string(&sec_path)
+        .map_err(|e| IdentityError::Malformed {
+            path: sec_path.clone(),
+            reason: e.to_string(),
+        })?
+        .trim()
+        .to_string();
+
+    let out = std::process::Command::new(buzz_cli)
+        // Env, not argv: process arguments are world-readable via `ps`.
+        .env("BUZZ_PRIVATE_KEY", &secret)
+        .env("BUZZ_RELAY_URL", relay_url)
+        .args([
+            "users",
+            "set-profile",
+            "--name",
+            display_name,
+            "--about",
+            about,
+        ])
+        .output()
+        .map_err(|source| IdentityError::Unwritable {
+            role: role.to_string(),
+            path: buzz_cli.to_path_buf(),
+            source,
+        })?;
+
+    if !out.status.success() {
+        return Err(IdentityError::Malformed {
+            path: buzz_cli.to_path_buf(),
+            // stderr may quote our input but never the key, which was passed via env.
+            reason: String::from_utf8_lossy(&out.stderr).trim().to_string(),
+        });
+    }
+
+    Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
