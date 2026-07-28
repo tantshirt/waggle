@@ -1,0 +1,41 @@
+# --- Upstream Buzz checkout (external service, never committed, never modified) ---
+/vendor/buzz/
+/.buzz-data/
+
+# --- Secrets: agent Nostr keypairs. NEVER commit an nsec. ---
+*.nsec
+/keys/
+/secrets/
+.env
+.env.*
+!.env.example
+
+# --- Node ---
+node_modules/
+dist/
+build/
+*.tsbuildinfo
+npm-debug.log*
+pnpm-debug.log*
+.pnpm-store/
+
+# --- Rust ---
+target/
+**/*.rs.bk
+
+# --- Python ---
+__pycache__/
+.venv/
+*.pyc
+
+# --- Editors / OS ---
+.DS_Store
+.idea/
+.vscode/*
+!.vscode/extensions.json
+*.swp
+
+# --- Local scratch ---
+/tmp/
+/scratch/
+*.local.yaml

@@ -1,0 +1,53 @@
+waggle
+Copyright 2026 The waggle contributors
+
+This product includes software developed by third parties, as described below.
+
+--------------------------------------------------------------------------------
+Buzz
+--------------------------------------------------------------------------------
+
+Waggle is a distribution that self-hosts Buzz (https://github.com/block/buzz),
+Copyright Block, Inc., licensed under the Apache License, Version 2.0.
+
+Waggle does not fork, vendor, or modify the Buzz source. Buzz is consumed as an
+unmodified upstream artifact, pinned by release tag in the BUZZ_VERSION file.
+Configuration emitted by waggle (persona packs, workflow YAML, deploy manifests)
+is original work of the waggle contributors.
+
+--------------------------------------------------------------------------------
+BMAD Method
+--------------------------------------------------------------------------------
+
+Waggle is compatible with, and derives module definitions from, the BMAD-METHOD
+project (https://github.com/bmad-code-org/BMAD-METHOD), which is licensed under
+the MIT License. MIT-licensed material incorporated into or derived by this
+project retains its original MIT license grant and copyright notice; the MIT
+license text accompanies such material where it is distributed.
+
+TRADEMARK NOTICE
+
+"BMad", "BMad Method", "BMAD-METHOD", "BMad Core", "BMad Code", the associated
+logos, and the tagline "Build More, Architect Dreams" are trademarks of
+BMad Code, LLC.
+
+Waggle is an independent community project. It is NOT an official BMad product,
+is NOT endorsed by, sponsored by, or affiliated with BMad Code, LLC, and does not
+claim to be. References to BMad marks in this project appear only in nominative,
+descriptive form — to accurately state compatibility and integration — as
+permitted by the BMad Trademark Policy.
+
+Consistent with Section 6 of the Apache License, Version 2.0, no trademark
+license is granted by this project for any third-party mark, including the
+BMad marks.
+
+Trademark questions regarding the BMad marks should be directed to
+contact@bmadcode.com.
+
+--------------------------------------------------------------------------------
+Nostr protocol
+--------------------------------------------------------------------------------
+
+Waggle implements and references NIPs from the Nostr protocol specification
+(https://github.com/nostr-protocol/nips), which is released into the public
+domain under CC0 1.0 Universal.

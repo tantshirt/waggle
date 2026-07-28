@@ -1,0 +1,12 @@
+# Pinned upstream versions targeted by this distribution.
+# Waggle self-hosts stock Buzz from upstream. We never fork or vendor it.
+
+BUZZ_VERSION=v0.4.26
+BUZZ_REPO=https://github.com/block/buzz
+
+BMAD_METHOD_VERSION=6.10.0
+
+# Toolchains (must match what upstream Buzz requires; see Buzz README)
+RUST_VERSION=1.88
+NODE_VERSION=24
+PNPM_VERSION=10
