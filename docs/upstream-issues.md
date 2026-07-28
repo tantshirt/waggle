@@ -115,3 +115,21 @@ reproduced locally) · `confirmed` (reproduced here) · `filed` (issue/PR open u
 - **Candidate contribution:** publishing an official relay image to GHCR would remove that
   burden from every self-hoster, not just us. Probably the highest-value upstream ask on
   this list.
+
+## UP-09 — `runtime` persona field is accepted but undocumented
+
+- **Status:** `confirmed` — observed 2026-07-28 against `v0.4.26`.
+- **Detail:** the persona frontmatter parser uses `deny_unknown_fields`, and its rejection
+  message enumerates the accepted set:
+  `name, display_name, avatar, description, version, author, skills, mcp_servers, subscribe,
+  respond_to, triggers, model, runtime, temperature, max_context_tokens, thread_replies,
+  broadcast_replies, hooks`.
+  **`runtime` is in that list but appears nowhere in `PERSONA_PACK_SPEC.md` §4's field
+  reference table.** Its type, valid values, default, and precedence behavior are all
+  unspecified.
+- **Impact on waggle:** low today — waggle does not emit `runtime`. But it is a field that
+  presumably selects the agent runtime, which would matter a great deal for FR-13. We cannot
+  use it without guessing.
+- **Our mitigation:** do not emit `runtime`. Recorded in `docs/persona-pack-contract.md` §3.
+- **Candidate contribution:** document `runtime` in the spec's §4 table, or remove it from
+  the accepted set if it is vestigial. Small, concrete, and easy for a maintainer to confirm.

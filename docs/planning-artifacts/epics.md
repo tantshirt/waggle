@@ -269,32 +269,39 @@ So that every later story has a real substrate to build against instead of assum
 **Then** the document states explicitly whether upstream's environment tooling supplies the toolchain or the contributor must upgrade
 **And** the resolution of OQ-6 is recorded.
 
-### Story 1.2: Write down the substrate's undocumented agent contracts
+### Story 1.2: Validate the persona pack contract against a real pack
+
+> **Rescoped 2026-07-28, during implementation.** Originally "write down the substrate's
+> *undocumented* agent contracts." The premise was false: the contract is fully specified in
+> `crates/buzz-persona/PERSONA_PACK_SPEC.md`, which our research missed by reading only
+> repo-root docs. UP-04 is withdrawn. The story became validation rather than discovery —
+> the same risk, retired a different way.
 
 As a waggle contributor,
-I want the substrate's persona pack schema, keypair provisioning, tool configuration, and channel-join procedure documented from source,
-So that the compiler has a real output contract instead of an inferred one.
+I want the documented persona pack contract proven against a real pack and a real validator,
+So that the compiler targets verified behavior rather than a spec we have only read.
 
 **Acceptance Criteria:**
 
-**Given** the Buzz source at the pinned tag
-**When** I read `buzz-persona`, `buzz-agent`, `buzz-cli`, and `buzz-admin`
-**Then** a schema appendix is committed under `docs/` specifying the persona pack shape, the identity provisioning procedure, the tool configuration schema, and the channel-join procedure
-**And** every field is marked as required or optional with its type.
+**Given** the pack specification at the pinned tag
+**When** a persona pack is hand-built for the pilot module
+**Then** `buzz pack validate` accepts it
+**And** `buzz pack inspect` reports the expected persona, display name, triggers, and skills.
 
-**Given** the documented schema
-**When** a hand-written persona pack conforming to it is loaded by the substrate's agent runtime
-**Then** it is accepted without error
-**And** that round trip is committed as an executable test, so the appendix cannot silently drift.
+**Given** the validator accepts our pack
+**When** three specific defects are injected — a missing required field, an unknown frontmatter key, and a persona file listed in the manifest but absent
+**Then** each is rejected with a specific error
+**And** all of this runs from one committed script, so "valid" cannot mean "the validator does nothing."
 
-**Given** the appendix is complete
-**When** OQ-3 and UP-04 are reviewed
-**Then** both are marked resolved with a pointer to the appendix
-**And** a candidate upstream documentation contribution is drafted in `docs/upstream-issues.md`.
+**Given** the method installation's skills
+**When** they are placed in the pack unmodified
+**Then** every one satisfies the substrate's required `name:` and `description:` frontmatter
+**And** the format compatibility is asserted by the same script.
 
-**Given** any contract that could not be determined from source
-**When** the appendix is written
-**Then** it is recorded as an explicit open item rather than guessed.
+**Given** the verified contract
+**When** the schema appendix is written
+**Then** it records the authoritative field list, the BMAD-to-pack mapping, the behavioral-config precedence and merge rules, and every field not yet mapped
+**And** any disagreement between the spec and the implementation is logged as an upstream issue.
 
 ### Story 1.3: Bring up a hive from a pinned, CI-built image
 

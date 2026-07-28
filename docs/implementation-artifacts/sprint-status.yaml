@@ -15,7 +15,7 @@ story_location: "docs/implementation-artifacts"
 development_status:
   epic-1: in-progress
   1-1-stand-up-a-hive-and-post-one-signed-message: done
-  1-2-write-down-the-substrates-undocumented-agent-contracts: backlog
+  1-2-validate-the-persona-pack-contract-against-a-real-pack: done
   1-3-bring-up-a-hive-from-a-pinned-ci-built-image: backlog
   1-4-refuse-to-run-against-unsupported-versions: backlog
   1-5-give-the-test-architect-its-own-identity-in-the-hive: backlog
