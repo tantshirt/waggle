@@ -5,11 +5,13 @@
 //! without a substrate, a method installation, or a network.
 
 pub mod compile;
+pub mod gate;
 pub mod merge;
 pub mod pins;
 pub mod version;
 
 pub use compile::{compile_persona, CompileError, CompileReport, MenuItem, PersonaPack};
+pub use gate::{authorize, GateError, GateVerdict, Role, Verdict};
 pub use merge::{merge, merge_layers};
 pub use pins::{parse_pins, range};
 pub use version::{Compatibility, Version, VersionRange};

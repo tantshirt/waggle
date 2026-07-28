@@ -1,0 +1,11 @@
+description: "Release gate for the tea module. A human reaction on a verdict event publishes a signed gate record. Approval authorization is checked against the relay-signed admin list before the record is trusted."
+enabled: true
+name: "waggle-gate-tea"
+steps:
+  - action: "send_message"
+    id: "publish_gate_record"
+    name: "Publish the signed gate record"
+    text: "waggle-gate-record\nmodule: tea\nverdict-event: {{trigger.message_id}}\napprover: {{trigger.author}}\napproved-at: {{trigger.timestamp}}\nreaction: {{trigger.emoji}}"
+trigger:
+  emoji: "white_check_mark"
+  on: "reaction_added"

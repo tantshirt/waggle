@@ -21,8 +21,8 @@ development_status:
   1-5-give-the-test-architect-its-own-identity-in-the-hive: in-progress
   1-6-compile-murats-descriptor-into-a-persona-pack: done
   1-7-see-the-test-architect-present-as-a-hive-member: in-progress
-  1-8-compile-the-tea-release-gate-into-a-workflow: backlog
-  1-9-approve-a-gate-with-a-reaction-and-reconstruct-it-from-the-log: backlog
+  1-8-compile-the-tea-release-gate-into-a-workflow: done
+  1-9-approve-a-gate-with-a-reaction-and-reconstruct-it-from-the-log: in-progress
   epic-1-retrospective: optional
 
   epic-2: backlog

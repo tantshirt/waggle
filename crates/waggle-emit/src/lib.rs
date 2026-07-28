@@ -7,6 +7,8 @@
 //! The output contract is `crates/buzz-persona/PERSONA_PACK_SPEC.md`, verified in Story 1.2
 //! and recorded in `docs/persona-pack-contract.md`.
 
+pub mod workflow;
+
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
@@ -71,7 +73,7 @@ pub fn emit_pack(
     let pack_dir = out_dir.join(meta.module);
     let mut files = Vec::new();
 
-    for sub in [".plugin", "agents", "skills"] {
+    for sub in [".plugin", "agents", "skills", "workflows"] {
         let d = pack_dir.join(sub);
         std::fs::create_dir_all(&d).map_err(|source| EmitError::Mkdir {
             path: d.clone(),
@@ -99,6 +101,17 @@ pub fn emit_pack(
     let instructions_path = pack_dir.join("instructions.md");
     write(&instructions_path, meta.instructions)?;
     files.push(instructions_path);
+
+    // --- workflows/<module>-gate.yaml ---
+    // The gate is the module's release checkpoint (FR-4, FR-19).
+    let gate = crate::workflow::gate_workflow(meta.module);
+    let gate_yaml = crate::workflow::render(&gate)
+        .expect("workflow definition is plain data and always serializes");
+    let gate_path = pack_dir
+        .join("workflows")
+        .join(format!("{}.yaml", gate.name));
+    write(&gate_path, &gate_yaml)?;
+    files.push(gate_path);
 
     // --- skills/ ---
     // Copied verbatim: BMAD skills and Buzz pack skills are the same format, so this is
