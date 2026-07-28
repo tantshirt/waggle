@@ -65,6 +65,31 @@ enum Command {
         #[arg(long)]
         substrate: Option<PathBuf>,
     },
+
+    /// Manage agent identities — one Nostr keypair per method role.
+    #[command(subcommand)]
+    Identity(IdentityCmd),
+}
+
+#[derive(Subcommand)]
+enum IdentityCmd {
+    /// Generate a keypair for a role.
+    ///
+    /// Secret key material is written owner-only to `<root>/keys/` (gitignored) and is
+    /// never printed. Existing identities are left alone unless `--force` is given.
+    Provision {
+        /// Role name, lowercase with dashes — e.g. `tea`, `dev`, `sm`.
+        #[arg(long)]
+        role: String,
+
+        /// Replace an existing identity. **Destructive**: the old key is gone, and
+        /// nothing it signed can be attributed to the new one.
+        #[arg(long)]
+        force: bool,
+    },
+
+    /// List provisioned identities. Public data only.
+    List,
 }
 
 /// One versioned envelope shared by every command (AD-20 consistency convention).
@@ -147,6 +172,94 @@ fn main() -> ExitCode {
                 .clone()
                 .unwrap_or_else(|| waggle_hive::default_path(&root));
             run_preflight(&root, &substrate_path, allow_unsupported, cli.format)
+        }
+        Command::Identity(ref cmd) => run_identity(&root, cmd, cli.format),
+    }
+}
+
+#[derive(Serialize)]
+struct IdentityView {
+    role: String,
+    public_key: String,
+    npub: String,
+}
+
+impl From<waggle_hive::AgentIdentity> for IdentityView {
+    fn from(i: waggle_hive::AgentIdentity) -> Self {
+        // Note what is absent: there is no secret field to forget to strip (AD-14).
+        Self {
+            role: i.role,
+            public_key: i.public_key_hex,
+            npub: i.npub,
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct IdentityListReport {
+    key_dir: String,
+    identities: Vec<IdentityView>,
+}
+
+fn run_identity(root: &std::path::Path, cmd: &IdentityCmd, format: Format) -> ExitCode {
+    match cmd {
+        IdentityCmd::Provision { role, force } => {
+            match waggle_hive::identity::provision(root, role, *force) {
+                Ok(id) => {
+                    let view = IdentityView::from(id);
+                    match format {
+                        Format::Json => emit(format, "identity.provision", true, &view),
+                        Format::Text => {
+                            println!("role   {}", view.role);
+                            println!("npub   {}", view.npub);
+                            println!("pubkey {}", view.public_key);
+                        }
+                    }
+                    if matches!(format, Format::Text) {
+                        eprintln!(
+                            "\nsecret key written to {}/{}.nsec (owner-only, gitignored).\n\
+                             Never commit it, and never paste it anywhere.",
+                            waggle_hive::identity::key_dir(root).display(),
+                            role
+                        );
+                    }
+                    ExitCode::from(exit::OK)
+                }
+                Err(e) => {
+                    eprintln!("error: {e}");
+                    // An existing identity is the caller's decision to make, not a
+                    // system fault — USER, so scripts can distinguish it.
+                    ExitCode::from(exit::USER)
+                }
+            }
+        }
+        IdentityCmd::List => {
+            let identities: Vec<IdentityView> = waggle_hive::identity::list(root)
+                .into_iter()
+                .map(IdentityView::from)
+                .collect();
+
+            let report = IdentityListReport {
+                key_dir: waggle_hive::identity::key_dir(root).display().to_string(),
+                identities,
+            };
+
+            match format {
+                Format::Json => emit(format, "identity.list", true, &report),
+                Format::Text => {
+                    if report.identities.is_empty() {
+                        println!(
+                            "no identities provisioned in {}\n  waggle identity provision --role tea",
+                            report.key_dir
+                        );
+                    } else {
+                        for i in &report.identities {
+                            println!("{:<10} {}", i.role, i.npub);
+                        }
+                    }
+                }
+            }
+            ExitCode::from(exit::OK)
         }
     }
 }

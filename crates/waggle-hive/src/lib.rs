@@ -8,6 +8,10 @@
 //! release, so it carries no release information. The tag is the only local source of truth
 //! about which Buzz you actually have.
 
+pub mod identity;
+
+pub use identity::{AgentIdentity, IdentityError};
+
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
