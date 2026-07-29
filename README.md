@@ -33,7 +33,8 @@ $ buzz pack validate packs/tea
 Valid.
 ```
 
-And the gate — the reason the project exists — fires for real:
+And the gate — the reason the project exists — fires for real. **But see the correction
+below: the gate *mechanism* works and its *attribution* does not.**
 
 ```
 verdict (CONCERNS, P1, with rationale)
@@ -45,8 +46,13 @@ verdict (CONCERNS, P1, with rationale)
            approved-at:   1785264314
 ```
 
-The record alone identifies the verdict, the approver, and the time. Nothing outside
-the log is consulted — which is the whole promise.
+> ⚠️ **FR-22 is NOT satisfied, and an earlier version of this README claimed it was.**
+> An independent reviewer gate found that gate records are signed by the **relay keypair**,
+> not by the approver — the `approver:` line is an *unsigned assertion in the message body*.
+> Worse, `{{trigger.author}}` is resolved from an `actor` tag on the triggering event with
+> no relay-pubkey guard, so the named approver is **spoofable**. The relay's own ingest path
+> has exactly that guard; the workflow path lacks it. See `docs/upstream-issues.md` UP-18.
+> Stories 1.8 and 1.9 are reopened.
 
 ### What works today
 
@@ -67,13 +73,14 @@ Honest accounting — see `docs/implementation-artifacts/sprint-status.yaml`.
 | Gap | Blocked on |
 |---|---|
 | A live agent generating its own verdict (1.7, 1.9) | LLM provider credentials; `buzz-acp` needs an agent runtime on PATH |
-| CI-built relay image (1.3) | A decision to publish images to a public registry |
+| ~~CI-built relay image (1.3)~~ | **Unblocked** — `ghcr.io/block/buzz` is public; pull it. AD-17's build pipeline is redundant (UP-08 withdrawn) |
 | Relay membership registration (1.5) | A stable relay signing key; the pubkey allowlist is off by default, so nothing needs it yet |
 | Modules beyond the pilot | **Done.** `bmm` compiles — 6 agents, zero compiler changes (SM-5) |
 | Agent roster membership in channels | Same live-agent blocker: rosters report `no live instances` |
 
 Stories 1.8/1.9 were exercised with a verdict published by hand rather than generated
-by an agent. The gate *mechanics* are proven; the verdict's *author* was simulated.
+by an agent. The gate *mechanics* are proven; the verdict's *author* was simulated — and,
+per UP-18, the *approver's* attribution is not cryptographically bound either.
 
 ## Quick start
 
@@ -157,7 +164,9 @@ cargo clippy --workspace --all-targets -- -D warnings
 Each negative-tests itself: a check that only asserts the happy path can pass while
 the thing it guards is broken. **Three times** in this project a test passed or failed
 for a reason unrelated to what it claimed to test, caught only by deliberately breaking
-the input. The portability lint, for example, is verified by poisoning a template with a
+the input. Tests were not enough on their own: the independent reviewer gates in
+`docs/planning-artifacts/*/reviews/` found a critical defect (UP-18) that every green
+test had missed, because the tests verified the mechanism and never asked who signed it. The portability lint, for example, is verified by poisoning a template with a
 forbidden kind and requiring the compile to fail.
 
 ## Documentation
@@ -168,7 +177,8 @@ forbidden kind and requiring the compile to fail.
 | [`docs/dev-loop.md`](docs/dev-loop.md) | How stories get built |
 | [`docs/persona-pack-contract.md`](docs/persona-pack-contract.md) | The compiler's output contract, verified |
 | [`docs/research-notes.md`](docs/research-notes.md) | Upstream research + §6 corrections |
-| [`docs/upstream-issues.md`](docs/upstream-issues.md) | 9 upstream findings, one withdrawn as wrong |
+| [`docs/upstream-issues.md`](docs/upstream-issues.md) | 18 upstream findings — **three withdrawn as our own error**, one a security defect |
+| [`docs/planning-artifacts/*/reviews/`](docs/planning-artifacts/) | Independent reviewer-gate reports |
 | [`docs/planning-artifacts/`](docs/planning-artifacts/) | Brief, PRD, architecture spine, epics |
 
 ## Pinned versions

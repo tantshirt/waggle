@@ -253,3 +253,90 @@ reproduced locally) · `confirmed` (reproduced here) · `filed` (issue/PR open u
   Test fixtures deliberately select a small commit rather than assuming any commit fits.
 - **Candidate contribution:** advertise per-kind limits in NIP-11, or at least document
   them. A client cannot currently know whether a patch will be accepted without trying.
+
+---
+
+# Reviewer-gate corrections (2026-07-29)
+
+Independent reviewer gates on the PRD and architecture spine — skipped earlier for lack of
+subagents — found that **four of the issues above are wrong**, and surfaced a security
+defect that invalidates a claim this project made about itself. Each correction below was
+re-verified by hand against source or a live relay before being recorded; the reviews are
+in `docs/planning-artifacts/*/reviews/`.
+
+The pattern in every case is the same one already recorded in UP-07 and UP-13, and not
+learned from: **`buzz-cli` is narrower than the relay, and its limits were mistaken for the
+substrate's.**
+
+## UP-18 — Gate approval attribution is neither signed by the approver nor tamper-proof
+
+- **Status:** `confirmed` — verified in source and against a live relay, 2026-07-29.
+- **Severity: critical.** This invalidates waggle's own claim that Stories 1.8/1.9 satisfied
+  FR-22 and SM-2.
+
+Two independent defects:
+
+**1. The relay signs gate records, not the approver.** `workflow_sink.rs:304` signs workflow
+output with `state.relay_keypair`. Verified live: our gate record is signed by
+`79be667e…` (the relay key) while its body claims `approver: 47e6e1db…`. The approver is an
+**unsigned assertion inside the message body**. A verifying third party learns only that the
+relay said so.
+
+**2. The claimed approver is spoofable.** `buzz-workflow/src/lib.rs:~888` resolves
+`{{trigger.author}}` from an `actor` tag on the triggering event, falling back to the real
+pubkey. There is no relay-pubkey guard. The relay's own `ingest.rs:728`
+(`effective_message_author`) has exactly that guard — `if event.pubkey == *relay_pubkey` —
+so the correct pattern exists in the codebase and the workflow path simply lacks it. A
+client can publish a reaction carrying `["actor", "<someone-else>"]` and the resulting gate
+record will name that person as approver.
+
+- **Impact on waggle:** FR-22 ("the gate record is self-contained and its signature
+  verifies") is **not met**. Stories 1.8 and 1.9 are reopened. The mechanism works; the
+  *attribution* does not.
+- **Our mitigation:** waggle must publish the gate record itself, signed by an agent
+  identity, deriving the approver from the reaction event it read directly — the
+  `waggle-hive::events` path built in Epic 3 already does exactly this for artifacts. The
+  relay-signed workflow record becomes a trigger, not the record of truth.
+- **Candidate contribution (security):** add the `ingest.rs` relay-pubkey guard to the
+  workflow trigger context. Small, and the correct code already exists two files away.
+
+## UP-08 — ~~Buzz publishes no relay container image~~ WITHDRAWN
+
+- **Status:** `withdrawn` — **this was wrong.**
+- **Reality:** `ghcr.io/block/buzz` is public and anonymously pullable. Verified: an
+  anonymous token fetch returns tags including `main`, `latest`, and `sha-*`.
+  `.github/workflows/docker.yml` publishes it.
+- **What we got wrong:** we checked release *assets* on tag `v0.4.26` — a **desktop**
+  release — and the org packages API. Relay images ship on their own tags and are not
+  release assets.
+- **Consequence:** **AD-17's CI image-build pipeline is redundant**, and Story 1.3 was
+  deferred pending a publishing decision that never needed making. Pull the upstream image.
+
+## UP-16 — ~~Blossom accepts image MIME types only~~ WITHDRAWN
+
+- **Status:** `withdrawn` — **this was wrong, and avoidably so.**
+- **Reality:** the images-only allowlist is in **`buzz-cli`** (`client.rs:~1116`, raised as
+  `CliError::Usage`). The relay's `buzz-media/src/validation.rs::validate_file_content` is
+  the catch-all path for "documents, archives, text, data", and explicitly accepts "plain
+  text, CSV, source code, JSON" as `application/octet-stream`, subject to a deny-list and a
+  size cap.
+- **Consequence:** **FR-16's content-addressed reference is achievable after all**, via the
+  relay's upload endpoint rather than `buzz-cli`. Story 3.2's refusal behaviour was built on
+  a false constraint and is reopened.
+- **Why this one stings:** UP-07 and UP-13 had already established that `buzz-cli` is
+  narrower than the relay. UP-16 was written afterwards and repeated the same mistake.
+
+## UP-17 — Correction: the 61,440 limit is not the patch limit
+
+- **Status:** `confirmed` but **misattributed**. Per review, 61,440 governs kind `40008`,
+  not kind `1617`; patches share the 262,144 content ceiling. Our 83 KB patch was rejected
+  by a limit we then attributed to the wrong kind.
+- The substantive finding stands — limits differ per kind and none are advertised — but the
+  table in UP-17 above is wrong and should not be cited.
+
+## UP-03 — Reported false by review; not yet re-verified by us
+
+- Review reports `RedisRateLimiter` fully wired (`state.rs:712`) with `POST /events` and
+  `/query` capped at 300 calls/min returning `429`. If so, NFR-8 and risk R-9 are backwards,
+  and waggle's HTTP-only publish path concentrates traffic precisely there **with no backoff
+  designed**. Flagged for verification rather than recorded as fact.
