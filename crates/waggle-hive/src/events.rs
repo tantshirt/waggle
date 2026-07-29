@@ -54,6 +54,9 @@ pub enum EventError {
 
     #[error("artifact is invalid: {0}")]
     Invalid(#[from] waggle_core::artifact::ArtifactError),
+
+    #[error("artifact body is {bytes} bytes, over the relay's {limit}-byte content limit — the substrate's media store accepts images only, so it cannot be carried by reference (UP-16); split the artifact or shorten it")]
+    TooLarge { bytes: usize, limit: usize },
 }
 
 /// Load a role's keys. Private: the secret never leaves this module (AD-14).
@@ -118,6 +121,60 @@ fn hex_encode(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
+/// Size limits, discovered from the relay rather than hard-coded (AD-15).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Limits {
+    /// NIP-11 `max_message_length` — the whole event JSON.
+    pub max_message: usize,
+    /// Maximum `content` length the relay enforces.
+    ///
+    /// **Not advertised anywhere.** NIP-11 reports `max_message_length` (524288 on
+    /// `v0.4.26`) but the relay separately rejects content over 262144 with
+    /// `content exceeds maximum size of 262144`. The two disagree and only the larger is
+    /// discoverable, so this is derived as half the advertised message length — which
+    /// matches the observed value — and re-checked against the relay's own rejection.
+    /// Logged as UP-15.
+    pub max_content: usize,
+}
+
+impl Default for Limits {
+    fn default() -> Self {
+        // Values observed on v0.4.26, used only when NIP-11 is unavailable.
+        Limits {
+            max_message: 524_288,
+            max_content: 262_144,
+        }
+    }
+}
+
+/// Read the relay's advertised limits (NIP-11). Falls back to observed defaults.
+pub fn discover_limits(relay_url: &str) -> Limits {
+    let client = reqwest::blocking::Client::new();
+    let resp = client
+        .get(relay_url.trim_end_matches('/'))
+        .header("Accept", "application/nostr+json")
+        .send();
+
+    let Ok(resp) = resp else {
+        return Limits::default();
+    };
+    let Ok(doc) = resp.json::<serde_json::Value>() else {
+        return Limits::default();
+    };
+
+    let max_message = doc
+        .get("limitation")
+        .and_then(|l| l.get("max_message_length"))
+        .and_then(serde_json::Value::as_u64)
+        .map(|v| v as usize)
+        .unwrap_or(Limits::default().max_message);
+
+    Limits {
+        max_message,
+        max_content: max_message / 2,
+    }
+}
+
 /// What the relay accepted.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Published {
@@ -137,7 +194,35 @@ pub fn publish_artifact(
     artifact: &ArtifactEvent,
     nonce: &str,
 ) -> Result<Published, EventError> {
+    publish_artifact_with_limits(project_root, role, relay_url, artifact, nonce, None)
+}
+
+/// As [`publish_artifact`], with limits supplied rather than discovered.
+pub fn publish_artifact_with_limits(
+    project_root: &Path,
+    role: &str,
+    relay_url: &str,
+    artifact: &ArtifactEvent,
+    nonce: &str,
+    limits: Option<Limits>,
+) -> Result<Published, EventError> {
     artifact.validate()?;
+
+    // FR-16 / AD-15: check size *before* publishing, so an oversized artifact produces a
+    // specific refusal rather than a relay 400 or, worse, a silent truncation.
+    //
+    // Reference-carrying is not available: the substrate's Blossom store accepts only
+    // image MIME types (image/jpeg|png|gif|webp), so a large markdown artifact cannot be
+    // stored there and referenced. Refusing loudly is the honest behaviour until an
+    // alternative exists — see UP-16.
+    let limits = limits.unwrap_or_else(|| discover_limits(relay_url));
+    let len = artifact.body.len();
+    if len > limits.max_content {
+        return Err(EventError::TooLarge {
+            bytes: len,
+            limit: limits.max_content,
+        });
+    }
     let keys = load_keys(project_root, role)?;
 
     let mut tags = Vec::new();
@@ -339,5 +424,100 @@ mod tests {
             matches!(err, EventError::Invalid(_)),
             "expected validation failure, got {err}"
         );
+    }
+}
+
+#[cfg(test)]
+mod size_tests {
+    use super::*;
+    use waggle_core::{ArtifactKind, Priority};
+
+    fn artifact(body: String) -> ArtifactEvent {
+        ArtifactEvent {
+            kind_marker: ArtifactKind::Artifact,
+            channel_id: "c".into(),
+            artifact_type: None,
+            module: None,
+            story: None,
+            priority: Some(Priority::P1),
+            references: vec![],
+            from_role: None,
+            to_role: None,
+            body,
+        }
+    }
+
+    fn identity(name: &str) -> std::path::PathBuf {
+        let root = std::env::temp_dir().join(format!("waggle-size-{name}"));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("keys")).unwrap();
+        let keys = Keys::generate();
+        std::fs::write(
+            root.join("keys").join("tea.nsec"),
+            keys.secret_key().to_secret_hex(),
+        )
+        .unwrap();
+        root
+    }
+
+    #[test]
+    fn oversized_body_is_refused_before_any_network_call() {
+        // Pointing at a dead port proves the size check runs first: a network attempt
+        // would surface as Unreachable, not TooLarge.
+        let root = identity("over");
+        let limits = Limits {
+            max_message: 1000,
+            max_content: 500,
+        };
+        let err = publish_artifact_with_limits(
+            &root,
+            "tea",
+            "http://127.0.0.1:1",
+            &artifact("x".repeat(501)),
+            "n",
+            Some(limits),
+        )
+        .unwrap_err();
+
+        match err {
+            EventError::TooLarge { bytes, limit } => {
+                assert_eq!((bytes, limit), (501, 500));
+                // NFR-4: the message must say what to do, not merely that it failed.
+                let msg = EventError::TooLarge { bytes, limit }.to_string();
+                assert!(msg.contains("images only"), "{msg}");
+                assert!(msg.contains("split"), "{msg}");
+            }
+            other => panic!("expected TooLarge, got {other}"),
+        }
+    }
+
+    #[test]
+    fn a_body_exactly_at_the_limit_is_allowed_through_the_check() {
+        let root = identity("edge");
+        let limits = Limits {
+            max_message: 1000,
+            max_content: 500,
+        };
+        let err = publish_artifact_with_limits(
+            &root,
+            "tea",
+            "http://127.0.0.1:1",
+            &artifact("x".repeat(500)),
+            "n",
+            Some(limits),
+        )
+        .unwrap_err();
+        // It gets past the size gate and fails on the network instead.
+        assert!(
+            matches!(err, EventError::Unreachable { .. }),
+            "expected the size check to pass, got {err}"
+        );
+    }
+
+    #[test]
+    fn limits_fall_back_to_observed_values_when_nip11_is_unavailable() {
+        let l = discover_limits("http://127.0.0.1:1");
+        assert_eq!(l, Limits::default());
+        assert_eq!(l.max_content, 262_144);
     }
 }

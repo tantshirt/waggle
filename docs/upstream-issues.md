@@ -190,3 +190,66 @@ reproduced locally) · `confirmed` (reproduced here) · `filed` (issue/PR open u
   protocol rather than shelling out for anything on the signed-trail path.
 - **Candidate contribution:** a repeatable `--tag name=value` flag on `messages send`
   would make `buzz-cli` sufficient for structured publishing.
+
+## UP-14 — The 64 KB frame limit is not an event size limit
+
+- **Status:** `confirmed` — measured against `v0.4.26`, 2026-07-29.
+- **What we had wrong:** `ARCHITECTURE.md` documents a 65,536-byte frame limit, and waggle's
+  own research notes, PRD (FR-16), and architecture (AD-15, OQ-2) all treated it as a
+  ceiling on artifact size. **It is the WebSocket frame limit.** Publishing over HTTP
+  `POST /events` is unaffected: a 200,000-byte event was accepted without complaint.
+- **The real ceiling is content length, at 262,144 bytes**, enforced with
+  `invalid: content exceeds maximum size of 262144`.
+- **Impact on waggle:** it *relaxes* a constraint. Artifacts have 4× the assumed headroom,
+  so almost every method artifact fits inline and the reference-carrying machinery FR-16
+  described is needed far less often than the PRD assumed.
+- **Recorded because** the mistake was ours: a documented number was applied to a transport
+  it did not govern, and nobody would have caught it without measuring.
+
+## UP-15 — NIP-11 advertises a message limit that disagrees with the enforced content limit
+
+- **Status:** `confirmed` — `v0.4.26`, 2026-07-29.
+- **Detail:** the relay's NIP-11 document reports `limitation.max_message_length: 524288`,
+  but content over `262144` is rejected. The enforced content ceiling is advertised
+  nowhere, so a client can only discover it by being refused.
+- **Impact on waggle:** low but awkward. AD-15 requires the threshold be *derived* from the
+  substrate rather than hard-coded; the only derivable number is the wrong one. waggle
+  reads `max_message_length` and halves it, which matches the observed value — a
+  coincidence that should not be relied on indefinitely.
+- **Candidate contribution:** advertise the content limit in NIP-11, or reconcile the two.
+
+## UP-16 — Blossom media accepts image MIME types only
+
+- **Status:** `confirmed` — `buzz upload file --file x.md` returns
+  `unsupported file type: application/octet-stream`. `ALLOWED_MIME_TYPES` in
+  `buzz-media/src/validation.rs` is `["image/jpeg", "image/png", "image/gif", "image/webp"]`.
+- **Impact on waggle:** **this blocks FR-16's chosen mechanism.** AD-15 resolved OQ-2 in
+  favour of content-addressed reference for oversized artifacts, but the substrate's media
+  store cannot hold a markdown document, so there is nothing to reference.
+- **Our mitigation:** refuse oversized artifacts with a specific error naming the size, the
+  limit, and why reference-carrying is unavailable. FR-16 forbids truncating or silently
+  dropping; it does not require accepting the unstorable. Mitigated further by UP-14 — the
+  real limit is 4× what we planned for, so this is rare.
+- **Candidate contribution:** allow `text/markdown` and `text/plain` in the Blossom
+  allowlist. Small change, and it would unblock document-carrying for every consumer, not
+  just us.
+
+## UP-17 — Content size limits differ per event kind, and none are advertised
+
+- **Status:** `confirmed` — measured on `v0.4.26`, 2026-07-29.
+- **Detail:** three different ceilings, discoverable only by hitting them:
+
+  | Path | Limit | How it surfaces |
+  |---|---|---|
+  | WebSocket frame | 65,536 | documented in `ARCHITECTURE.md` |
+  | kind:9 content (HTTP publish) | 262,144 | `content exceeds maximum size of 262144` |
+  | kind:1617 patch content | 61,440 | `content exceeds maximum size of 61440 bytes (got 83562)` |
+
+  NIP-11 advertises only `max_message_length: 524288`, which matches none of them.
+- **Impact on waggle:** medium. A patch limit four times smaller than the message limit is
+  genuinely surprising, and a real `git format-patch` of a documentation-heavy commit
+  exceeds it easily — the first patch we tried was 83 KB and was rejected.
+- **Our mitigation:** size-check before publishing and surface the relay's own numbers.
+  Test fixtures deliberately select a small commit rather than assuming any commit fits.
+- **Candidate contribution:** advertise per-kind limits in NIP-11, or at least document
+  them. A client cannot currently know whether a patch will be accepted without trying.

@@ -11,6 +11,7 @@
 pub mod channels;
 pub mod events;
 pub mod identity;
+pub mod patches;
 
 pub use identity::{AgentIdentity, IdentityError};
 

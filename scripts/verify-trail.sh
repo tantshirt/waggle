@@ -95,6 +95,81 @@ else
   bad "whole trail is one query, all on standard kind:9 (NFR-6)"
 fi
 
+# FR-16 / AD-15: size is checked against the relay's real limit, and an artifact that
+# cannot be carried is refused specifically rather than truncated or silently dropped.
+# Note the limit is 262144 (content), NOT the 65536 frame limit the docs suggest (UP-14).
+big="$(python3 -c "print('x' * 200000)")"
+if "$WAGGLE" --root "$REPO_ROOT" publish --role "$ROLE" --channel "$CH" \
+     --artifact-type prd --body "$big" --relay "$RELAY" >/dev/null 2>&1; then
+  pass "a 200 KB artifact publishes inline (well past the old 64 KB assumption)"
+else
+  bad "a 200 KB artifact publishes inline"
+fi
+
+huge="$(python3 -c "print('x' * 300000)")"
+msg="$("$WAGGLE" --root "$REPO_ROOT" publish --role "$ROLE" --channel "$CH" \
+        --artifact-type prd --body "$huge" --relay "$RELAY" 2>&1)"
+code=$?
+if [[ $code -ne 0 ]] && echo "$msg" | grep -q "262144"; then
+  pass "an oversized artifact is refused, naming the real limit"
+else
+  bad "an oversized artifact is refused, naming the real limit"
+fi
+if echo "$msg" | grep -q "images only"; then
+  pass "refusal explains why reference-carrying is unavailable (UP-16)"
+else
+  bad "refusal explains why reference-carrying is unavailable"
+fi
+
+# FR-18: developer output as a portable NIP-34 patch, linked to its story channel.
+# Patches have their OWN content limit (61440) distinct from kind:9's 262144 (UP-17),
+# so the fixture is deliberately a small commit.
+PUB="$(cat "$REPO_ROOT/keys/$ROLE.pub" 2>/dev/null)"
+EUC="$(git -C "$REPO_ROOT" rev-list --max-parents=0 HEAD | tail -1)"
+SMALL="$(git -C "$REPO_ROOT" rev-list HEAD | while read c; do
+  sz=$(git -C "$REPO_ROOT" format-patch -1 "$c" --stdout 2>/dev/null | wc -c)
+  if [ "$sz" -lt 50000 ] && [ "$sz" -gt 500 ]; then echo "$c"; break; fi
+done)"
+PF="$(mktemp)"; git -C "$REPO_ROOT" format-patch -1 "$SMALL" --stdout > "$PF"
+
+"$BUZZ" repos create --id "trailtest$$" --name "trail test" \
+  --clone https://example.invalid/x.git >/dev/null 2>&1
+
+OUT="$("$WAGGLE" --format json --root "$REPO_ROOT" patch --role "$ROLE" --channel "$CH" \
+        --repo-id "trailtest$$" --patch-file "$PF" --euc "$EUC" --relay "$RELAY" 2>&1)"
+if echo "$OUT" | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+assert d['patch_event'] and d['link_event'], d
+assert 1617 in d['kinds'], d['kinds']
+" 2>/dev/null; then
+  pass "patch publishes as NIP-34 kind:1617 and is linked to the story channel"
+else
+  bad "patch publishes as NIP-34 kind:1617 and is linked to the story channel"
+  echo "$OUT" | tail -2
+fi
+rm -f "$PF"
+
+# The link must reference the patch, or FR-18's traceability is decorative.
+if echo "$OUT" | python3 -c "
+import json,sys
+json.load(sys.stdin)
+" 2>/dev/null; then
+  PE="$(echo "$OUT" | python3 -c "import sys,json;print(json.load(sys.stdin)['patch_event'])")"
+  if "$WAGGLE" --format json --root "$REPO_ROOT" trail --role "$ROLE" --channel "$CH" \
+       --relay "$RELAY" 2>/dev/null \
+     | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+refs=[t[1] for e in d['events'] for t in e['tags'] if t[0]=='e']
+sys.exit(0 if '$PE' in refs else 1)
+"; then
+    pass "the story channel links back to the patch event"
+  else
+    bad "the story channel links back to the patch event"
+  fi
+fi
+
 echo
 if [[ $fail -eq 0 ]]; then echo "trail OK"; else echo "TRAIL DRIFT"; fi
 exit $fail

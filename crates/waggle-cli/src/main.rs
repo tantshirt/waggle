@@ -157,6 +157,46 @@ enum Command {
         relay: String,
     },
 
+    /// Publish developer output as a portable NIP-34 patch, linked to its story channel.
+    ///
+    /// The patch itself is standard git-over-Nostr, readable by any NIP-34 client. waggle
+    /// adds the link FR-18 requires: an event in the story channel referencing the patch
+    /// and the artifacts that motivated it.
+    Patch {
+        #[arg(long)]
+        role: String,
+
+        /// Story channel the patch belongs to.
+        #[arg(long)]
+        channel: String,
+
+        /// Repository identifier from the NIP-34 announcement.
+        #[arg(long)]
+        repo_id: String,
+
+        /// Repo owner pubkey (hex). Defaults to the signing role's own key.
+        #[arg(long)]
+        repo_owner: Option<String>,
+
+        /// A `git format-patch` file.
+        #[arg(long)]
+        patch_file: PathBuf,
+
+        /// Earliest unique commit: `git rev-list --max-parents=0 HEAD | tail -1`.
+        #[arg(long)]
+        euc: String,
+
+        /// Artifact events that motivated this patch.
+        #[arg(long = "ref")]
+        references: Vec<String>,
+
+        #[arg(long, default_value = "http://localhost:3000")]
+        relay: String,
+
+        #[arg(long)]
+        buzz_cli: Option<PathBuf>,
+    },
+
     /// Provision a module's channels and canvases into a running hive.
     ///
     /// Delegates creation to the substrate's own template mechanism, adding the
@@ -318,6 +358,25 @@ fn main() -> ExitCode {
             run_compile(&root, module, agent.as_deref(), &out_dir, cli.format)
         }
         Command::Modules => run_modules(&root, cli.format),
+        Command::Patch {
+            ref role,
+            ref channel,
+            ref repo_id,
+            ref repo_owner,
+            ref patch_file,
+            ref euc,
+            ref references,
+            ref relay,
+            ref buzz_cli,
+        } => {
+            let cli_path = buzz_cli
+                .clone()
+                .unwrap_or_else(|| root.join("vendor/buzz/target/release/buzz"));
+            run_patch(
+                &root, role, channel, repo_id, repo_owner, patch_file, euc, references, relay,
+                &cli_path, cli.format,
+            )
+        }
         Command::Publish {
             ref role,
             ref channel,
@@ -491,6 +550,108 @@ fn run_provision(
                 let canvas = if c.canvas_applied { " +canvas" } else { "" };
                 println!("{:<14} {}{}", c.outcome, c.channel, canvas);
             }
+        }
+    }
+    ExitCode::from(exit::OK)
+}
+
+#[derive(Serialize)]
+struct PatchReport {
+    patch_event: String,
+    link_event: String,
+    repo_id: String,
+    /// Standard NIP-34 kinds, so third-party clients can read this.
+    kinds: Vec<u32>,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_patch(
+    root: &std::path::Path,
+    role: &str,
+    channel: &str,
+    repo_id: &str,
+    repo_owner: &Option<String>,
+    patch_file: &std::path::Path,
+    euc: &str,
+    references: &[String],
+    relay: &str,
+    buzz_cli: &std::path::Path,
+    format: Format,
+) -> ExitCode {
+    // AD-14: read the secret here, hand it to the adapter, never hold it in the report.
+    let secret = match std::fs::read_to_string(root.join("keys").join(format!("{role}.nsec"))) {
+        Ok(s) => s.trim().to_string(),
+        Err(_) => {
+            eprintln!(
+                "error: no identity for role {role:?} — provision it first: \
+                 waggle identity provision --role {role}"
+            );
+            return ExitCode::from(exit::USER);
+        }
+    };
+
+    let owner = match repo_owner.clone() {
+        Some(o) => o,
+        None => match std::fs::read_to_string(root.join("keys").join(format!("{role}.pub"))) {
+            Ok(s) => s.trim().to_string(),
+            Err(e) => {
+                eprintln!("error: could not read the role's public key: {e}");
+                return ExitCode::from(exit::USER);
+            }
+        },
+    };
+
+    let patch_event = match waggle_hive::patches::send_patch(
+        buzz_cli, relay, &secret, &owner, repo_id, patch_file, euc, true,
+    ) {
+        Ok(id) => id,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::from(match e {
+                waggle_hive::patches::PatchError::NoPatchFile(_) => exit::USER,
+                _ => exit::UPSTREAM,
+            });
+        }
+    };
+
+    // FR-18's link: NIP-34 alone does not tie a patch to the story that motivated it.
+    let mut refs = vec![patch_event.clone()];
+    refs.extend(references.iter().cloned());
+
+    let link = waggle_core::ArtifactEvent {
+        kind_marker: waggle_core::ArtifactKind::Artifact,
+        channel_id: channel.to_string(),
+        artifact_type: Some("patch".into()),
+        module: None,
+        story: None,
+        priority: None,
+        references: refs,
+        from_role: Some(role.to_string()),
+        to_role: None,
+        body: format!("Patch {patch_event} published to repo {repo_id} (NIP-34 kind:1617)."),
+    };
+
+    let link_event =
+        match waggle_hive::events::publish_artifact(root, role, relay, &link, &uuid_like()) {
+            Ok(p) => p.event_id,
+            Err(e) => {
+                eprintln!("error: patch published but linking failed: {e}");
+                return ExitCode::from(exit::UPSTREAM);
+            }
+        };
+
+    let report = PatchReport {
+        patch_event,
+        link_event,
+        repo_id: repo_id.to_string(),
+        kinds: vec![1617],
+    };
+
+    match format {
+        Format::Json => emit(format, "patch", true, &report),
+        Format::Text => {
+            println!("patch  {}  (NIP-34 kind:1617)", report.patch_event);
+            println!("link   {}  in channel {channel}", report.link_event);
         }
     }
     ExitCode::from(exit::OK)
