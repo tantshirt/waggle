@@ -520,6 +520,8 @@ struct CompileOutput {
     skills_copied: Vec<String>,
     channel_templates: Vec<String>,
     reports: Vec<waggle_core::CompileReport>,
+    /// Kind-policy findings across every emitted artifact (FR-6, AD-8).
+    lint: Vec<waggle_core::Finding>,
 }
 
 fn run_compile(
@@ -646,6 +648,22 @@ fn run_compile(
         }
     };
 
+    // FR-6 / AD-8: lint every emitted artifact for kind-policy violations. Errors fail
+    // the compile — a pack that would be unreadable by standard clients, or that collides
+    // with a substrate-reserved range, is not worth shipping.
+    let mut findings: Vec<waggle_core::Finding> = Vec::new();
+    for path in &outcome.files_written {
+        let Ok(text) = std::fs::read_to_string(path) else {
+            continue;
+        };
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default();
+        findings.extend(waggle_core::lint::scan(&name, &text));
+    }
+    let lint_failed = waggle_core::has_errors(&findings);
+
     let output = CompileOutput {
         module: module.to_string(),
         agents: agent_ids,
@@ -658,10 +676,11 @@ fn run_compile(
         skills_copied: outcome.skills_copied,
         channel_templates: outcome.channel_templates,
         reports,
+        lint: findings,
     };
 
     match format {
-        Format::Json => emit(format, "compile", true, &output),
+        Format::Json => emit(format, "compile", !lint_failed, &output),
         Format::Text => {
             println!(
                 "compiled {} agent{} -> {}",
@@ -707,6 +726,24 @@ fn run_compile(
                 );
             }
         }
+    }
+
+    // Findings go to stderr in both formats: they are diagnostics, and stdout must stay
+    // parseable (AD-20).
+    for f in &output.lint {
+        let tag = match f.severity {
+            waggle_core::Severity::Error => "LINT ERROR",
+            waggle_core::Severity::Warning => "lint warn ",
+        };
+        eprintln!("  {tag}   {}: {}", f.artifact, f.reason);
+    }
+
+    if lint_failed {
+        eprintln!(
+            "\ncompile failed: generated output violates the kind policy (AD-8). \
+             Nothing was left half-written — the pack is on disk but must not be shipped."
+        );
+        return ExitCode::from(exit::USER);
     }
 
     ExitCode::from(exit::OK)

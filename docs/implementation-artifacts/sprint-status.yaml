@@ -25,16 +25,16 @@ development_status:
   1-9-approve-a-gate-with-a-reaction-and-reconstruct-it-from-the-log: in-progress
   epic-1-retrospective: optional
 
-  epic-2: in-progress
+  epic-2: done
   2-1-enumerate-any-method-installation: done
   2-2-resolve-overrides-exactly-as-the-method-does: done
   2-3-compile-every-agent-in-every-module: done
   2-4-compile-both-kinds-of-menu-item: done
-  2-5-see-exactly-what-a-compile-did: backlog
+  2-5-see-exactly-what-a-compile-did: done
   2-6-get-byte-identical-output-from-unchanged-input: done
   2-7-emit-and-apply-channel-canvas-templates: done
   # 2-8 absorbed into 2-7 (canvases are a field in the same template file; see research-notes 8)
-  2-9-drive-every-capability-from-the-command-line: backlog
+  2-9-drive-every-capability-from-the-command-line: done
   epic-2-retrospective: optional
 
   epic-3: backlog

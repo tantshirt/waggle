@@ -6,12 +6,14 @@
 
 pub mod compile;
 pub mod gate;
+pub mod lint;
 pub mod merge;
 pub mod pins;
 pub mod version;
 
 pub use compile::{compile_persona, CompileError, CompileReport, MenuItem, PersonaPack};
 pub use gate::{authorize, GateError, GateVerdict, Role, Verdict};
+pub use lint::{has_errors, Finding, Severity};
 pub use merge::{merge, merge_layers};
 pub use pins::{parse_pins, range};
 pub use version::{Compatibility, Version, VersionRange};

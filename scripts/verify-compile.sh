@@ -109,6 +109,38 @@ else
   bad "non-persona [agent] blocks are surfaced, not compiled (AD-6)"
 fi
 
+# --- FR-6 / AD-8: the portability lint must be clean on real output, and must actually
+# --- catch a violation. Zero findings proves nothing on its own.
+echo
+echo "waggle compile — portability lint (FR-6, AD-8)"
+
+if "$WAGGLE" --format json --root "$REPO_ROOT" compile --module tea --out "$TMP/lint" 2>/dev/null \
+   | python3 -c "import json,sys; d=json.load(sys.stdin); sys.exit(0 if not d['lint'] and d['ok'] else 1)"; then
+  pass "real output is lint-clean"
+else
+  bad "real output is lint-clean"
+fi
+
+# Poison a template with a substrate-proprietary kind and require the compile to fail.
+POISON="$TMP/poison"
+mkdir -p "$POISON"
+cp -R "$REPO_ROOT/_bmad" "$REPO_ROOT/.claude" "$REPO_ROOT/templates" "$POISON/" 2>/dev/null
+cp "$REPO_ROOT/BUZZ_VERSION" "$POISON/" 2>/dev/null
+python3 - "$POISON/templates/tea/channels.json" <<'PY2'
+import json, sys
+p = sys.argv[1]
+d = json.load(open(p))
+d[0]["canvas_template"] += chr(10) + "kind: 40002" + chr(10)
+json.dump(d, open(p, "w"), indent=2)
+PY2
+
+"$WAGGLE" --root "$POISON" compile --module tea --out "$POISON/packs" >/dev/null 2>&1
+if [[ $? -eq 1 ]]; then
+  pass "forbidden kind fails the compile with a USER exit"
+else
+  bad "forbidden kind fails the compile with a USER exit"
+fi
+
 echo
 if [[ $fail -eq 0 ]]; then echo "compile OK"; else echo "COMPILE DRIFT"; fi
 exit $fail
