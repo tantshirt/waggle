@@ -680,57 +680,52 @@ So that I can commit generated configuration and review it in diffs.
 **When** its dependencies are inspected
 **Then** it reads no clock, environment variable, or random source.
 
-### Story 2.7: Provision a module's rooms from template data
+### Story 2.7: Emit and apply channel + canvas templates
+
+> **Rescoped 2026-07-29 after investigation, before writing code.** Stories 2.7 and 2.8
+> assumed waggle would build a channel-template format *and* a canvas mechanism *and* a
+> provisioner. Buzz already ships all three: `buzz channels create --template` reads a
+> JSON store, and `--templates-file` lets waggle supply its own, so nothing is coupled to
+> the desktop app. Verified on a live relay — channel creation and canvas application both
+> work headlessly, and the canvas round-trips byte-exact. See `docs/research-notes.md` §8.
+>
+> **Story 2.8 is absorbed into this one.** Canvases are a field in the same template file;
+> there is no separate mechanism to build.
+>
+> Two gaps remain waggle's job: Buzz is **not idempotent** by channel name (UP-10), and
+> roster membership needs a **live managed agent** (same blocker as Story 1.7).
 
 As an operator,
-I want each module's channels created from declarative templates,
-So that adding a module's rooms requires no code change.
+I want each module's channels and canvases created from templates waggle ships,
+So that adopting a module gives me its rooms without hand-building any of them.
 
 **Acceptance Criteria:**
 
-**Given** a module with a channel template
-**When** I run channel provisioning
-**Then** the declared channels are created with their names, purposes, visibility, and agent memberships
-**And** re-running creates no duplicates.
+**Given** a compiled module pack
+**When** I inspect it
+**Then** it contains a `channel-templates.json` in the shape Buzz's template loader reads
+**And** each template declares name, description, channel type, visibility, and a canvas.
 
-**Given** a story identifier
-**When** I request a story channel
-**Then** one channel scoped to that story is created
-**And** requesting it again returns the existing channel rather than creating a second.
+**Given** that template file
+**When** I provision a module's channels
+**Then** waggle delegates to the substrate's own template mechanism via `--templates-file`
+**And** the created channel's canvas matches the template exactly
+**And** nothing depends on the Buzz desktop application.
 
-**Given** a module with no template
+**Given** a channel that already exists for the requested name
+**When** provisioning runs again
+**Then** waggle reports the existing channel and creates no duplicate
+**And** this check is waggle's own, because the substrate does not deduplicate (UP-10).
+
+**Given** a template whose agent roster cannot resolve because no agent instance is running
+**When** provisioning runs
+**Then** the channel and canvas are still created
+**And** each unresolved persona is reported by name with its reason, never silently dropped.
+
+**Given** a module with no template file
 **When** provisioning runs
 **Then** nothing is provisioned for it and the omission is reported
 **And** the command does not fail.
-
-**Given** the codebase
-**When** `waggle-core` and `waggle-emit` are scanned
-**Then** no conditional on a module identifier exists in either
-**And** a test fails if one is introduced.
-
-**Given** a provisioning failure
-**When** it occurs
-**Then** the specific channel and cause are named.
-
-### Story 2.8: Create a module's canvases from templates
-
-As a team member,
-I want each module's specification documents created as canvases from versioned templates,
-So that humans and agents can co-edit them in the workspace.
-
-**Acceptance Criteria:**
-
-**Given** a module with a canvas template
-**When** I create a canvas from it
-**Then** the canvas is created in the hive and is editable by both human members and agent identities.
-
-**Given** a created canvas
-**When** its provenance is inspected
-**Then** it records the template version it was created from.
-
-**Given** the same scope
-**When** canvas creation is run twice
-**Then** the second run returns the existing canvas rather than creating a duplicate.
 
 ### Story 2.9: Drive every capability from the command line
 

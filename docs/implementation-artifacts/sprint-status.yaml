@@ -32,8 +32,8 @@ development_status:
   2-4-compile-both-kinds-of-menu-item: done
   2-5-see-exactly-what-a-compile-did: backlog
   2-6-get-byte-identical-output-from-unchanged-input: done
-  2-7-provision-a-modules-rooms-from-template-data: backlog
-  2-8-create-a-modules-canvases-from-templates: backlog
+  2-7-emit-and-apply-channel-canvas-templates: backlog
+  # 2-8 absorbed into 2-7 (canvases are a field in the same template file; see research-notes 8)
   2-9-drive-every-capability-from-the-command-line: backlog
   epic-2-retrospective: optional
 

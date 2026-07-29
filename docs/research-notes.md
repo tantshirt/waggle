@@ -494,3 +494,80 @@ UP-01 is never fixed, waggle is still correct.
 
 All on standard kinds with typed body markers — no custom kind claimed, satisfying NFR-6
 and AD-8. A third-party NIP-29 client can read the whole chain.
+
+---
+
+## 8. Channel and canvas templates already exist upstream (2.7/2.8 rescope)
+
+Investigated 2026-07-29 against a live relay before writing any code, because
+`buzz channels create --template` looked like it might already do most of FR-10 /
+FR-25 / FR-26. It does — but not all of it, and the gaps are specific. `[BUZZ]`
+
+### 8.1 The upstream mechanism
+
+`buzz channels create --template <name> [--templates-file <path>]` reads a JSON store:
+
+```json
+[{
+  "name": "tea-test-strategy",
+  "description": "...",
+  "channel_type": "stream",
+  "visibility": "open",
+  "canvas_template": "# Test strategy\n...",
+  "agents": { "personas": [{"personaId": "bmad-tea"}], "teams": [{"teamId": "..."}] }
+}]
+```
+
+Source: `crates/buzz-cli/src/commands/channel_templates.rs`.
+
+**`--templates-file` always wins over the default path.** That is the finding that
+matters: the default is the *desktop app's* app-data directory
+(`<data>/xyz.block.buzz.app/templates/channel-templates.json`), which would have made
+this desktop-coupled and useless to us. The override means **waggle can ship its own
+template store inside the compiled pack** and never touch the desktop app.
+
+### 8.2 Verified behaviour
+
+| Capability | Result |
+|---|---|
+| Create channel from a waggle-supplied template file | ✅ headless |
+| Apply `canvas_template` to the new channel | ✅ `"canvas_applied": true`, content round-trips byte-exact |
+| Resolve the agent roster to members | ❌ `skipped: [{persona_id: "bmad-tea", reason: "no live instances"}]` |
+| Idempotent by channel name | ❌ **creates a duplicate** |
+| Degrade gracefully when the roster cannot resolve | ✅ channel + canvas still succeed; skips are reported, not silent |
+
+### 8.3 The two real gaps
+
+**Roster membership needs a live managed agent.** Resolution scans managed-agent events
+whose `content.persona_id` matches, to find pubkeys. Those are created by
+`buzz agents draft-create`, which *"opens a prefilled create-agent form in the owner's
+Buzz Desktop"* — a human-in-the-loop desktop flow with no headless equivalent. This is
+the **same blocker as Story 1.7**: without a running agent instance there is nothing to
+add to a channel.
+
+**Provisioning is not idempotent.** Creating twice with the same name yields two
+channels. FR-25 requires re-running to produce no duplicates, and NFR-2 requires
+idempotence generally, so **waggle must check before creating** — Buzz will not do it.
+
+### 8.4 Rescope
+
+Stories 2.7 and 2.8 shrink substantially and merge into one piece of work:
+
+| Was | Now |
+|---|---|
+| Build a channel-template format and a provisioner | **Emit `channel-templates.json` into each compiled pack** — the template *data* is the deliverable |
+| Build a canvas-template mechanism | **Covered upstream.** Canvases come from `canvas_template` in the same file |
+| Provision channels and add agents | **Thin wrapper** that checks for an existing channel first, then delegates to `buzz channels create --templates-file` |
+| Agent roster membership | **Deferred with Story 1.7** — same live-agent blocker |
+
+Net: 2.7 and 2.8 become mostly template authoring plus an existence check, not
+mechanism-building. This is the second time Epic 2 has turned out smaller than written
+(the first being that BMAD skills need no transformation at all, §6.2).
+
+### 8.5 Team events, unexplored but promising `[WAGGLE]`
+
+The template roster also accepts `teams: [{"teamId": ...}]`, resolved from kind `30176`
+events carrying `persona_ids`. Every BMAD agent descriptor already declares
+`team = "software-development"`. A single team event per module would let one template
+line pull in a whole module's agents rather than listing them individually. Not pursued
+yet; worth it once agent instances can run.

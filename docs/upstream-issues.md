@@ -133,3 +133,33 @@ reproduced locally) · `confirmed` (reproduced here) · `filed` (issue/PR open u
 - **Our mitigation:** do not emit `runtime`. Recorded in `docs/persona-pack-contract.md` §3.
 - **Candidate contribution:** document `runtime` in the spec's §4 table, or remove it from
   the accepted set if it is vestigial. Small, concrete, and easy for a maintainer to confirm.
+
+## UP-10 — Channel creation from a template is not idempotent
+
+- **Status:** `confirmed` — reproduced against `v0.4.26`, 2026-07-29.
+- **Detail:** `buzz channels create --name X --template T` run twice produces **two
+  channels named `X`**, each with its own UUID and its own canvas. There is no
+  name-uniqueness check and no "already exists" response.
+- **Impact on waggle:** medium. FR-25 requires re-running provisioning to produce no
+  duplicates and NFR-2 requires idempotence generally, so waggle must query for an
+  existing channel before creating one.
+- **Our mitigation:** check-then-create in `waggle-hive`. Note this is inherently racy
+  against concurrent creators; acceptable for a provisioning command, and the honest
+  alternative would need relay-side support.
+- **Candidate contribution:** an `--if-not-exists` flag, or returning the existing
+  channel when the name matches within a community. Small and self-contained.
+
+## UP-11 — Relay info document is missing the `self` field, so archive filtering is untrusted
+
+- **Status:** `confirmed` — observed 2026-07-29 on a local `v0.4.26` relay.
+- **Detail:** template-based channel creation emits
+  `archived-identities snapshot untrusted, proceeding without archive filtering: relay
+  info document missing 'self' field`. The relay's NIP-11 document does not advertise
+  `self`, so the CLI cannot verify the kind `13535` archive snapshot is relay-signed and
+  proceeds without filtering archived identities.
+- **Impact on waggle:** low today — we add no archived agents. It would matter once
+  agent identities are rotated or retired, since an archived agent could silently be
+  re-added to a channel.
+- **Our mitigation:** none needed yet. Recorded so the warning is not mistaken for noise.
+- **Candidate contribution:** populate `self` in the relay's NIP-11 document, or
+  document why it is absent in local dev.
