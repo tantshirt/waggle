@@ -37,12 +37,12 @@ development_status:
   2-9-drive-every-capability-from-the-command-line: done
   epic-2-retrospective: optional
 
-  epic-3: backlog
-  3-1-publish-any-method-artifact-as-a-signed-event: backlog
+  epic-3: in-progress
+  3-1-publish-any-method-artifact-as-a-signed-event: done
   3-2-publish-artifacts-larger-than-one-event: backlog
-  3-3-record-a-handoff-between-roles: backlog
+  3-3-record-a-handoff-between-roles: done
   3-4-publish-developer-output-as-a-portable-patch: backlog
-  3-5-filter-the-log-by-risk-priority: backlog
+  3-5-filter-the-log-by-risk-priority: done
   epic-3-retrospective: optional
 
 action_items: []

@@ -9,6 +9,7 @@
 //! about which Buzz you actually have.
 
 pub mod channels;
+pub mod events;
 pub mod identity;
 
 pub use identity::{AgentIdentity, IdentityError};

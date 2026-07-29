@@ -92,6 +92,71 @@ enum Command {
     /// List what the method installation registers: modules, agents, provenance.
     Modules,
 
+    /// Publish a method artifact as a signed, tagged event (FR-15, FR-17, FR-24).
+    ///
+    /// Publishes directly to the relay rather than through the substrate CLI, which
+    /// cannot attach typed tags (UP-07).
+    Publish {
+        /// Role whose identity signs the event.
+        #[arg(long)]
+        role: String,
+
+        /// Channel UUID.
+        #[arg(long)]
+        channel: String,
+
+        /// What this is: artifact, handoff, verdict, or gate-record.
+        #[arg(long, default_value = "artifact")]
+        marker: String,
+
+        /// Method artifact type, e.g. `prd`, `story`, `test-design`.
+        #[arg(long)]
+        artifact_type: Option<String>,
+
+        #[arg(long)]
+        module: Option<String>,
+
+        #[arg(long)]
+        story: Option<String>,
+
+        /// Risk priority: P0, P1, P2, or P3.
+        #[arg(long)]
+        priority: Option<String>,
+
+        /// Event ids this references. A handoff must name the artifact it transfers.
+        #[arg(long = "ref")]
+        references: Vec<String>,
+
+        #[arg(long)]
+        from_role: Option<String>,
+
+        #[arg(long)]
+        to_role: Option<String>,
+
+        /// Body text, or `-` to read stdin.
+        #[arg(long)]
+        body: String,
+
+        #[arg(long, default_value = "http://localhost:3000")]
+        relay: String,
+    },
+
+    /// Query the signed trail by tag, returning verifiable events (FR-22, FR-24).
+    Trail {
+        #[arg(long)]
+        role: String,
+
+        #[arg(long)]
+        channel: String,
+
+        /// Filter by priority (P0-P3), or omit for the whole waggle trail.
+        #[arg(long)]
+        priority: Option<String>,
+
+        #[arg(long, default_value = "http://localhost:3000")]
+        relay: String,
+    },
+
     /// Provision a module's channels and canvases into a running hive.
     ///
     /// Delegates creation to the substrate's own template mechanism, adding the
@@ -253,6 +318,41 @@ fn main() -> ExitCode {
             run_compile(&root, module, agent.as_deref(), &out_dir, cli.format)
         }
         Command::Modules => run_modules(&root, cli.format),
+        Command::Publish {
+            ref role,
+            ref channel,
+            ref marker,
+            ref artifact_type,
+            ref module,
+            ref story,
+            ref priority,
+            ref references,
+            ref from_role,
+            ref to_role,
+            ref body,
+            ref relay,
+        } => run_publish(
+            &root,
+            role,
+            channel,
+            marker,
+            artifact_type,
+            module,
+            story,
+            priority,
+            references,
+            from_role,
+            to_role,
+            body,
+            relay,
+            cli.format,
+        ),
+        Command::Trail {
+            ref role,
+            ref channel,
+            ref priority,
+            ref relay,
+        } => run_trail(&root, role, channel, priority.as_deref(), relay, cli.format),
         Command::Provision {
             ref module,
             ref role,
@@ -394,6 +494,198 @@ fn run_provision(
         }
     }
     ExitCode::from(exit::OK)
+}
+
+#[derive(Serialize)]
+struct PublishReport {
+    event_id: String,
+    pubkey: String,
+    marker: String,
+    tags: Vec<Vec<String>>,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_publish(
+    root: &std::path::Path,
+    role: &str,
+    channel: &str,
+    marker: &str,
+    artifact_type: &Option<String>,
+    module: &Option<String>,
+    story: &Option<String>,
+    priority: &Option<String>,
+    references: &[String],
+    from_role: &Option<String>,
+    to_role: &Option<String>,
+    body: &str,
+    relay: &str,
+    format: Format,
+) -> ExitCode {
+    let kind_marker = match marker {
+        "artifact" => waggle_core::ArtifactKind::Artifact,
+        "handoff" => waggle_core::ArtifactKind::Handoff,
+        "verdict" => waggle_core::ArtifactKind::Verdict,
+        "gate-record" => waggle_core::ArtifactKind::GateRecord,
+        other => {
+            eprintln!(
+                "error: {other:?} is not a marker — expected artifact, handoff, verdict, or gate-record"
+            );
+            return ExitCode::from(exit::USER);
+        }
+    };
+
+    let priority = match priority {
+        Some(p) => match waggle_core::Priority::parse(p) {
+            Ok(v) => Some(v),
+            Err(e) => {
+                eprintln!("error: {e}");
+                return ExitCode::from(exit::USER);
+            }
+        },
+        None => None,
+    };
+
+    let body_text = if body == "-" {
+        use std::io::Read as _;
+        let mut buf = String::new();
+        if let Err(e) = std::io::stdin().read_to_string(&mut buf) {
+            eprintln!("error: could not read stdin: {e}");
+            return ExitCode::from(exit::SYSTEM);
+        }
+        buf
+    } else {
+        body.to_string()
+    };
+
+    let artifact = waggle_core::ArtifactEvent {
+        kind_marker,
+        channel_id: channel.to_string(),
+        artifact_type: artifact_type.clone(),
+        module: module.clone(),
+        story: story.clone(),
+        priority,
+        references: references.to_vec(),
+        from_role: from_role.clone(),
+        to_role: to_role.clone(),
+        body: body_text,
+    };
+
+    // A fresh nonce per request; the relay treats a repeat as a replay otherwise.
+    let nonce = uuid_like();
+
+    match waggle_hive::events::publish_artifact(root, role, relay, &artifact, &nonce) {
+        Ok(p) => {
+            let report = PublishReport {
+                event_id: p.event_id,
+                pubkey: p.pubkey,
+                marker: marker.to_string(),
+                tags: artifact.tags(),
+            };
+            match format {
+                Format::Json => emit(format, "publish", true, &report),
+                Format::Text => {
+                    println!("published {} {}", report.marker, report.event_id);
+                    println!("  signed by {}", report.pubkey);
+                }
+            }
+            ExitCode::from(exit::OK)
+        }
+        Err(e) => {
+            eprintln!("error: {e}");
+            ExitCode::from(match e {
+                waggle_hive::events::EventError::Invalid(_)
+                | waggle_hive::events::EventError::NotProvisioned { .. } => exit::USER,
+                _ => exit::UPSTREAM,
+            })
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct TrailReport {
+    channel: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    priority: Option<String>,
+    count: usize,
+    events: Vec<serde_json::Value>,
+}
+
+fn run_trail(
+    root: &std::path::Path,
+    role: &str,
+    channel: &str,
+    priority: Option<&str>,
+    relay: &str,
+    format: Format,
+) -> ExitCode {
+    // Priority rides a `t` tag because NIP-01 only indexes single-letter tags.
+    let (letter, value) = match priority {
+        Some(p) => match waggle_core::Priority::parse(p) {
+            Ok(v) => ('t', v.tag_value().to_string()),
+            Err(e) => {
+                eprintln!("error: {e}");
+                return ExitCode::from(exit::USER);
+            }
+        },
+        None => ('t', waggle_core::artifact::TAG_WAGGLE.to_string()),
+    };
+
+    match waggle_hive::events::query_by_tag(
+        root,
+        role,
+        relay,
+        channel,
+        letter,
+        &value,
+        &uuid_like(),
+    ) {
+        Ok(events) => {
+            let report = TrailReport {
+                channel: channel.to_string(),
+                priority: priority.map(str::to_string),
+                count: events.len(),
+                events,
+            };
+            match format {
+                Format::Json => emit(format, "trail", true, &report),
+                Format::Text => {
+                    println!("{} event(s)", report.count);
+                    for e in &report.events {
+                        let id = e.get("id").and_then(|v| v.as_str()).unwrap_or("?");
+                        let signed = e.get("sig").and_then(|v| v.as_str()).is_some();
+                        let first = e
+                            .get("content")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .lines()
+                            .next()
+                            .unwrap_or("");
+                        println!(
+                            "  {}  sig:{}  {}",
+                            &id[..12.min(id.len())],
+                            if signed { "yes" } else { "NO" },
+                            first
+                        );
+                    }
+                }
+            }
+            ExitCode::from(exit::OK)
+        }
+        Err(e) => {
+            eprintln!("error: {e}");
+            ExitCode::from(exit::UPSTREAM)
+        }
+    }
+}
+
+/// A nonce for NIP-98. Not a UUID library dependency for one string.
+fn uuid_like() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let n = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or_default();
+    format!("waggle-{n}")
 }
 
 #[derive(Serialize)]

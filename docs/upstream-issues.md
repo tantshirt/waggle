@@ -163,3 +163,30 @@ reproduced locally) · `confirmed` (reproduced here) · `filed` (issue/PR open u
 - **Our mitigation:** none needed yet. Recorded so the warning is not mistaken for noise.
 - **Candidate contribution:** populate `self` in the relay's NIP-11 document, or
   document why it is absent in local dev.
+
+## UP-12 — `POST /query` requires an array of filters, undocumented
+
+- **Status:** `confirmed` — reproduced against `v0.4.26`, 2026-07-29.
+- **Detail:** posting a bare Nostr filter object to `/query` returns
+  `400 {"error":"invalid filters: invalid type: map, expected a sequence"}`. The endpoint
+  wants a JSON **array** of filters. `buzz-cli` wraps it internally, so the requirement is
+  invisible to anyone reading the CLI or the endpoint description ("Nostr REQ filters over
+  HTTP") rather than the deserializer.
+- **Impact on waggle:** none now that it is known — one line. Recorded because it cost a
+  round trip and would cost the next implementer the same.
+- **Candidate contribution:** state the array requirement in the HTTP surface
+  documentation, or accept a bare object for convenience.
+
+## UP-13 — `buzz-cli` cannot attach arbitrary tags when sending a message
+
+- **Status:** `confirmed` — `messages send` exposes `--kind`, `--reply-to`, `--broadcast`,
+  and `--file`, but no way to set a tag.
+- **Impact on waggle:** **high, and it compounds UP-07.** Nostr only indexes single-letter
+  tags for `#<letter>` filter queries, so a queryable trail needs typed tags at publish
+  time. Without them FR-24 ("filter the log by priority") would degrade to fetching
+  everything and filtering client-side.
+- **Our mitigation:** `waggle-hive` publishes directly to `POST /events` with NIP-98 auth
+  and full control of the tag set. Together with UP-07 this is why waggle speaks the relay
+  protocol rather than shelling out for anything on the signed-trail path.
+- **Candidate contribution:** a repeatable `--tag name=value` flag on `messages send`
+  would make `buzz-cli` sufficient for structured publishing.
