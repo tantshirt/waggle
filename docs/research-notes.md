@@ -426,3 +426,71 @@ Worth investigating before Epic 2 estimates are trusted.
 - **AD-2 clarification:** `.env` is gitignored *by Buzz itself*, so editing it is
   configuration, not modification. The enforceable invariant is "no **tracked** file
   modified" — `git status --porcelain` empty.
+
+---
+
+## 7. Workflow engine contract, verified (Story 1.8)
+
+Established by compiling a gate and creating it on a running relay. Schema source is
+`crates/buzz-workflow/src/schema.rs` at `v0.4.26`. `[BUZZ]`
+
+### 7.1 Shape
+
+```yaml
+name: "waggle-gate-tea"          # required, non-empty
+description: "..."               # optional
+enabled: true                    # defaults true
+trigger:
+  on: "reaction_added"           # internally tagged by `on`
+  emoji: "white_check_mark"      # optional filter
+steps:
+  - id: "publish_gate_record"    # see 7.2
+    name: "..."
+    action: "send_message"       # action tag is FLATTENED onto the step
+    text: "..."
+```
+
+**Triggers:** `message_posted` · `reaction_added` · `diff_posted` · `schedule` · `webhook`.
+**Actions:** `send_message` · `send_dm` · `set_channel_topic` · `add_reaction` ·
+`call_webhook` · `request_approval` · `delay`.
+
+**Template variables** resolved at fire time: `{{trigger.text}}`, `{{trigger.author}}`,
+`{{trigger.channel_id}}`, `{{trigger.timestamp}}`, `{{trigger.emoji}}`,
+`{{trigger.message_id}}`, and `{{steps.<id>.output.<field>}}`. In `if` expressions the
+same values appear flattened as `trigger_text`, `trigger_author`, and so on.
+
+### 7.2 ⚠️ Step ids reject dashes — undocumented
+
+`step id 'publish-gate-record' is invalid: must contain only alphanumeric characters and
+underscores`
+
+This constraint is **not stated in the schema source's doc comments**; it surfaced only at
+`workflows create` time against a live relay. Anything generating workflow YAML must
+sanitize ids to `[A-Za-z0-9_]`. waggle asserts it in a unit test so the emitter cannot
+regress.
+
+**Method lesson, again:** the schema type is not the contract. Validation lives in
+`validate()` and in the relay, not in the struct definition. Create against a real relay
+before believing a generated document is acceptable.
+
+### 7.3 Why waggle does not emit `request_approval`
+
+The action exists and would be the obvious way to build a gate. We do not use it:
+upstream marks runs reaching an approval step as **failed** rather than suspended
+(UP-01). A gate built on it would report failure for every approval.
+
+Instead the **reaction is the approval**, and the workflow's only job is to write a
+signed record into the channel. That satisfies FR-22 (reconstructible from the log alone)
+directly rather than depending on substrate run state, which is what AD-10 requires. If
+UP-01 is never fixed, waggle is still correct.
+
+### 7.4 Verified gate chain
+
+| Step | Event | Kind |
+|---|---|---|
+| Test Architect publishes a verdict | `waggle-gate-verdict` + verdict/priority/rationale | `9` |
+| Human approves | reaction `white_check_mark` on the verdict event | `7` |
+| Workflow fires | `waggle-gate-record` naming verdict event, approver, time, reaction | `9` |
+
+All on standard kinds with typed body markers — no custom kind claimed, satisfying NFR-6
+and AD-8. A third-party NIP-29 client can read the whole chain.

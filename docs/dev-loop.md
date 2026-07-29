@@ -80,3 +80,47 @@ The PRD and the architecture spine were both finalized with their reviewer gates
 because subagents were unavailable at the time. Both are logged as overrides in their memlogs.
 Now that subagents are permitted, re-running those two gates is worthwhile before Epic 2 — the
 spine especially, since AD-1 … AD-20 bind every story after it.
+
+---
+
+## Where the loop stopped (2026-07-29)
+
+Epic 1 ran to the end of what is reachable without external credentials or a publishing
+decision. Current state is in `docs/implementation-artifacts/sprint-status.yaml`; this
+section records *why* each unfinished story is unfinished, so the next session does not
+re-derive it.
+
+| Story | State | Why |
+|---|---|---|
+| 1.1 walking skeleton | **done** | — |
+| 1.2 pack contract | **done** | Rescoped mid-flight; the contract was documented, not missing |
+| 1.3 CI-built image | backlog | **Needs a decision:** publishing images to a public registry is outward-facing |
+| 1.4 version preflight | **done** | — |
+| 1.5 agent identity | in-progress | Provisioning + profile done; `add-member` needs a stable relay signing key |
+| 1.6 compile persona pack | **done** | SM-1 achieved |
+| 1.7 agent as hive member | in-progress | Profile done; a live turn needs an agent runtime + LLM credentials |
+| 1.8 compile the gate | **done** | Fires end to end on a real relay |
+| 1.9 approve + reconstruct | in-progress | Mechanics proven; the verdict was published by hand, not generated |
+
+### The three unblocks
+
+1. **LLM provider credentials** + an ACP runtime (`goose` or a built `buzz-agent`) on
+   PATH. Finishes 1.7 and 1.9 properly. `buzz-acp` reads `BUZZ_ACP_AGENT_COMMAND`;
+   model selection projects to `GOOSE_PROVIDER` / `GOOSE_MODEL`.
+2. **A decision on publishing container images.** Unblocks 1.3 and AD-17.
+3. **`BUZZ_RELAY_PRIVATE_KEY`** set on the relay, then restart. Unblocks 1.5's
+   `add-member`. Low urgency: the pubkey allowlist is off by default, so agents
+   authenticate and publish without it.
+
+### What is genuinely next, needing nothing
+
+**Epic 2.** The compiler already has no module-specific branches (AD-16, asserted), so
+compiling a second module is the cheapest way to test SM-5 — and Story 1.2's finding
+that BMAD skills *are* Buzz pack skills means Epic 2 should be re-estimated downward
+before it is scheduled.
+
+Also outstanding: the **reviewer gates skipped on the PRD and the architecture spine**
+while subagents were unavailable. Both are logged as overrides in their memlogs. The
+spine's gate is worth running before Epic 2, since `AD-1`…`AD-20` bind everything after
+it — and this project has already had two tests pass for the wrong reason, which is
+exactly the class of thing an independent reviewer catches.
