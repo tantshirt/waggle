@@ -67,7 +67,7 @@ pub struct EmitOutcome {
 /// Write the pack. The directory is created if absent; existing files are overwritten.
 pub fn emit_pack(
     out_dir: &Path,
-    pack: &PersonaPack,
+    packs: &[PersonaPack],
     meta: &PackMeta<'_>,
 ) -> Result<EmitOutcome, EmitError> {
     let pack_dir = out_dir.join(meta.module);
@@ -82,7 +82,7 @@ pub fn emit_pack(
     }
 
     // --- .plugin/plugin.json ---
-    let manifest = build_manifest(pack, meta);
+    let manifest = build_manifest(packs, meta);
     let manifest_path = pack_dir.join(".plugin").join("plugin.json");
     let mut manifest_json = serde_json::to_string_pretty(&manifest)
         .expect("manifest is plain data and always serializes");
@@ -90,12 +90,14 @@ pub fn emit_pack(
     write(&manifest_path, &manifest_json)?;
     files.push(manifest_path);
 
-    // --- agents/<id>.persona.md ---
-    let persona_path = pack_dir
-        .join("agents")
-        .join(format!("{}.persona.md", pack.name));
-    write(&persona_path, &render_persona(pack))?;
-    files.push(persona_path);
+    // --- agents/<id>.persona.md, one per registered agent ---
+    for pack in packs {
+        let persona_path = pack_dir
+            .join("agents")
+            .join(format!("{}.persona.md", pack.name));
+        write(&persona_path, &render_persona(pack))?;
+        files.push(persona_path);
+    }
 
     // --- instructions.md ---
     let instructions_path = pack_dir.join("instructions.md");
@@ -116,13 +118,24 @@ pub fn emit_pack(
     // --- skills/ ---
     // Copied verbatim: BMAD skills and Buzz pack skills are the same format, so this is
     // placement rather than translation (verified in Story 1.2).
+    // Union across every persona in the module, deduplicated and ordered (AD-4).
+    let mut wanted: Vec<String> = Vec::new();
+    for pack in packs {
+        for s in pack.skill_ids() {
+            if !wanted.contains(&s) {
+                wanted.push(s);
+            }
+        }
+    }
+    wanted.sort();
+
     let mut skills_copied = Vec::new();
-    for skill in pack.skill_ids() {
+    for skill in wanted {
         let src = meta.skills_source.join(&skill);
         if !src.join("SKILL.md").exists() {
-            let code = pack
-                .menu
+            let code = packs
                 .iter()
+                .flat_map(|p| p.menu.iter())
                 .find(|m| matches!(m, MenuItem::Dispatch { skill: s, .. } if *s == skill))
                 .map(|m| m.code().to_string())
                 .unwrap_or_default();
@@ -177,7 +190,7 @@ struct Triggers {
     all_messages: bool,
 }
 
-fn build_manifest(pack: &PersonaPack, meta: &PackMeta<'_>) -> Manifest {
+fn build_manifest(packs: &[PersonaPack], meta: &PackMeta<'_>) -> Manifest {
     Manifest {
         schema: "https://open-plugin-spec.org/schema/v1/plugin.json",
         id: format!("dev.waggle.pack.{}", meta.module),
@@ -185,10 +198,18 @@ fn build_manifest(pack: &PersonaPack, meta: &PackMeta<'_>) -> Manifest {
         // Version tracks the module it was compiled from, so a pack's provenance is
         // legible without opening it.
         version: meta.module_version.trim_start_matches('v').to_string(),
-        description: pack.description.clone(),
+        description: format!(
+            "{} agent{} compiled from the {} module of a BMAD Method installation.",
+            packs.len(),
+            if packs.len() == 1 { "" } else { "s" },
+            meta.module
+        ),
         author: "The waggle contributors",
         license: "Apache-2.0",
-        personas: vec![format!("agents/{}.persona.md", pack.name)],
+        personas: packs
+            .iter()
+            .map(|p| format!("agents/{}.persona.md", p.name))
+            .collect(),
         pack_instructions: "instructions.md",
         defaults: Defaults {
             triggers: Triggers {

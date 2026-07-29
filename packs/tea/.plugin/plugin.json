@@ -3,7 +3,7 @@
   "id": "dev.waggle.pack.tea",
   "name": "waggle — tea",
   "version": "1.19.1",
-  "description": "Compiled from the tea module of a BMAD Method installation.",
+  "description": "1 agent compiled from the tea module of a BMAD Method installation.",
   "author": "The waggle contributors",
   "license": "Apache-2.0",
   "personas": [

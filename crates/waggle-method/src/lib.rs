@@ -4,6 +4,7 @@
 //! belong in `_bmad/custom/`, which the installer never regenerates.
 
 pub mod descriptors;
+pub mod registry;
 
 use std::path::{Path, PathBuf};
 

@@ -79,14 +79,18 @@ enum Command {
         #[arg(long)]
         module: String,
 
-        /// Agent id to compile, e.g. `bmad-tea`.
+        /// Agent id to compile, e.g. `bmad-tea`. Omit to compile every agent the
+        /// module registers.
         #[arg(long)]
-        agent: String,
+        agent: Option<String>,
 
         /// Output directory. Defaults to `<root>/packs`.
         #[arg(long)]
         out: Option<PathBuf>,
     },
+
+    /// List what the method installation registers: modules, agents, provenance.
+    Modules,
 }
 
 #[derive(Subcommand)]
@@ -220,25 +224,141 @@ fn main() -> ExitCode {
             ref out,
         } => {
             let out_dir = out.clone().unwrap_or_else(|| root.join("packs"));
-            run_compile(&root, module, agent, &out_dir, cli.format)
+            run_compile(&root, module, agent.as_deref(), &out_dir, cli.format)
+        }
+        Command::Modules => run_modules(&root, cli.format),
+    }
+}
+
+#[derive(Serialize)]
+struct ModuleView {
+    module: String,
+    version: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    source: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    sha: Option<String>,
+    agents: Vec<AgentView>,
+}
+
+#[derive(Serialize)]
+struct AgentView {
+    id: String,
+    name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    icon: Option<String>,
+}
+
+#[derive(Serialize)]
+struct ModulesReport {
+    method_version: String,
+    modules: Vec<ModuleView>,
+    /// Skills carrying an [agent] block the registry does not list. Reported, never
+    /// compiled — they are usually workflow-shaped skills, not personas (AD-6).
+    unregistered_agent_blocks: Vec<String>,
+}
+
+fn run_modules(root: &std::path::Path, format: Format) -> ExitCode {
+    let installation = match waggle_method::detect(root) {
+        Ok(i) => i,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::from(exit::UPSTREAM);
+        }
+    };
+    let registry = match waggle_method::registry::read(root) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::from(exit::UPSTREAM);
+        }
+    };
+
+    let tool_dirs = waggle_method::descriptors::tool_dirs(&installation.ides);
+    let tool_dir = tool_dirs.first().cloned().unwrap_or_default();
+
+    let modules: Vec<ModuleView> = waggle_method::registry::modules(&registry)
+        .into_iter()
+        .map(|m| {
+            let meta = installation.modules.iter().find(|im| im.name == m);
+            ModuleView {
+                version: meta.map(|x| x.version_raw.clone()).unwrap_or_default(),
+                source: meta.and_then(|x| x.source.clone()),
+                sha: meta.and_then(|x| x.sha.clone()),
+                agents: waggle_method::registry::agents_for_module(&registry, &m)
+                    .into_iter()
+                    .map(|id| {
+                        let a = &registry[&id];
+                        AgentView {
+                            id,
+                            name: a.name.clone(),
+                            title: a.title.clone(),
+                            icon: a.icon.clone(),
+                        }
+                    })
+                    .collect(),
+                module: m,
+            }
+        })
+        .collect();
+
+    let report = ModulesReport {
+        method_version: installation.version_raw.clone(),
+        unregistered_agent_blocks: waggle_method::registry::unregistered_agent_blocks(
+            root, &tool_dir, &registry,
+        ),
+        modules,
+    };
+
+    match format {
+        Format::Json => emit(format, "modules", true, &report),
+        Format::Text => {
+            println!("method {}", report.method_version);
+            for m in &report.modules {
+                println!("\n{} {}", m.module, m.version);
+                if let Some(sha) = &m.sha {
+                    println!(
+                        "  provenance {} @ {}",
+                        m.source.clone().unwrap_or_default(),
+                        &sha[..7.min(sha.len())]
+                    );
+                }
+                for a in &m.agents {
+                    println!(
+                        "  {:<26} {} {}",
+                        a.id,
+                        a.name,
+                        a.icon.clone().unwrap_or_default()
+                    );
+                }
+            }
+            if !report.unregistered_agent_blocks.is_empty() {
+                println!(
+                    "\nnot personas (an [agent] block, but not registered): {}",
+                    report.unregistered_agent_blocks.join(", ")
+                );
+            }
         }
     }
+    ExitCode::from(exit::OK)
 }
 
 #[derive(Serialize)]
 struct CompileOutput {
     module: String,
-    agent: String,
+    agents: Vec<String>,
     pack_dir: String,
     files_written: Vec<String>,
     skills_copied: Vec<String>,
-    report: waggle_core::CompileReport,
+    reports: Vec<waggle_core::CompileReport>,
 }
 
 fn run_compile(
     root: &std::path::Path,
     module: &str,
-    agent: &str,
+    agent: Option<&str>,
     out_dir: &std::path::Path,
     format: Format,
 ) -> ExitCode {
@@ -250,15 +370,35 @@ fn run_compile(
             return ExitCode::from(exit::UPSTREAM);
         }
     };
+    let registry = match waggle_method::registry::read(root) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::from(exit::UPSTREAM);
+        }
+    };
 
     let tool_dirs = waggle_method::descriptors::tool_dirs(&installation.ides);
     let Some(tool_dir) = tool_dirs.first() else {
-        eprintln!(
-            "error: the installation manifest records no tool directories, so agent \
-             bodies cannot be located"
-        );
+        eprintln!("error: the installation manifest records no tool directories");
         return ExitCode::from(exit::UPSTREAM);
     };
+
+    // One agent, or every agent the module registers. The registry is authoritative:
+    // enumerating [agent] blocks from disk would sweep up workflow-shaped skills that
+    // are not personas at all.
+    let agent_ids: Vec<String> = match agent {
+        Some(a) => vec![a.to_string()],
+        None => waggle_method::registry::agents_for_module(&registry, module),
+    };
+
+    if agent_ids.is_empty() {
+        eprintln!(
+            "error: module {module:?} registers no agents. Known modules: {}",
+            waggle_method::registry::modules(&registry).join(", ")
+        );
+        return ExitCode::from(exit::USER);
+    }
 
     let module_version = installation
         .modules
@@ -270,22 +410,36 @@ fn run_compile(
             "0.0.0".to_string()
         });
 
-    let descriptor = match waggle_method::descriptors::resolve_agent(root, tool_dir, agent) {
-        Ok(d) => d,
-        Err(e) => {
-            eprintln!("error: {e}");
-            return ExitCode::from(exit::UPSTREAM);
-        }
-    };
+    let mut packs = Vec::new();
+    let mut reports = Vec::new();
 
-    let description = format!("Compiled from the {module} module of a BMAD Method installation.");
-    let (pack, report) = match waggle_core::compile_persona(agent, &descriptor, &description) {
-        Ok(v) => v,
-        Err(e) => {
-            eprintln!("error: {e}");
-            return ExitCode::from(exit::UPSTREAM);
+    for id in &agent_ids {
+        let descriptor = match waggle_method::descriptors::resolve_agent(root, tool_dir, id) {
+            Ok(d) => d,
+            Err(e) => {
+                eprintln!("error: {id}: {e}");
+                return ExitCode::from(exit::UPSTREAM);
+            }
+        };
+        // The registry holds the description; customize.toml does not.
+        let description = registry
+            .get(id)
+            .and_then(|a| a.description.clone())
+            .unwrap_or_else(|| {
+                format!("Compiled from the {module} module of a BMAD Method installation.")
+            });
+
+        match waggle_core::compile_persona(id, &descriptor, &description) {
+            Ok((p, r)) => {
+                packs.push(p);
+                reports.push(r);
+            }
+            Err(e) => {
+                eprintln!("error: {id}: {e}");
+                return ExitCode::from(exit::UPSTREAM);
+            }
         }
-    };
+    }
 
     let instructions = include_str!("../assets/instructions.md");
     let meta = waggle_emit::PackMeta {
@@ -295,7 +449,7 @@ fn run_compile(
         instructions,
     };
 
-    let outcome = match waggle_emit::emit_pack(out_dir, &pack, &meta) {
+    let outcome = match waggle_emit::emit_pack(out_dir, &packs, &meta) {
         Ok(o) => o,
         Err(e) => {
             eprintln!("error: {e}");
@@ -305,7 +459,7 @@ fn run_compile(
 
     let output = CompileOutput {
         module: module.to_string(),
-        agent: agent.to_string(),
+        agents: agent_ids,
         pack_dir: outcome.pack_dir.display().to_string(),
         files_written: outcome
             .files_written
@@ -313,29 +467,49 @@ fn run_compile(
             .map(|p| p.display().to_string())
             .collect(),
         skills_copied: outcome.skills_copied,
-        report,
+        reports,
     };
 
     match format {
         Format::Json => emit(format, "compile", true, &output),
         Format::Text => {
-            println!("compiled {} -> {}", output.agent, output.pack_dir);
-            println!("  mapped       {}", output.report.mapped.join(", "));
+            println!(
+                "compiled {} agent{} -> {}",
+                output.agents.len(),
+                if output.agents.len() == 1 { "" } else { "s" },
+                output.pack_dir
+            );
             println!("  skills       {} copied", output.skills_copied.len());
-            if !output.report.prompt_only.is_empty() {
+            for r in &output.reports {
+                let mut notes = Vec::new();
+                if !r.prompt_only.is_empty() {
+                    notes.push(format!("prompt-only: {}", r.prompt_only.join(",")));
+                }
+                if !r.unknown.is_empty() {
+                    notes.push(format!("UNKNOWN: {}", r.unknown.join(",")));
+                }
+                if !r.dropped.is_empty() {
+                    notes.push(format!(
+                        "dropped: {}",
+                        r.dropped
+                            .iter()
+                            .map(|d| d.field.as_str())
+                            .collect::<Vec<_>>()
+                            .join(",")
+                    ));
+                }
+                for w in &r.warnings {
+                    notes.push(format!("warning: {w}"));
+                }
                 println!(
-                    "  prompt-only  {} (carried into the persona body, no skill)",
-                    output.report.prompt_only.join(", ")
+                    "  {:<26} {}",
+                    r.agent_id,
+                    if notes.is_empty() {
+                        "ok".to_string()
+                    } else {
+                        notes.join(" | ")
+                    }
                 );
-            }
-            for d in &output.report.dropped {
-                println!("  dropped      {} — {}", d.field, d.reason);
-            }
-            if !output.report.unknown.is_empty() {
-                println!("  UNKNOWN      {}", output.report.unknown.join(", "));
-            }
-            for w in &output.report.warnings {
-                println!("  warning      {w}");
             }
         }
     }

@@ -1,0 +1,28 @@
+{
+  "$schema": "https://open-plugin-spec.org/schema/v1/plugin.json",
+  "id": "dev.waggle.pack.bmm",
+  "name": "waggle — bmm",
+  "version": "6.10.0",
+  "description": "6 agents compiled from the bmm module of a BMAD Method installation.",
+  "author": "The waggle contributors",
+  "license": "Apache-2.0",
+  "personas": [
+    "agents/bmad-agent-analyst.persona.md",
+    "agents/bmad-agent-architect.persona.md",
+    "agents/bmad-agent-dev.persona.md",
+    "agents/bmad-agent-pm.persona.md",
+    "agents/bmad-agent-tech-writer.persona.md",
+    "agents/bmad-agent-ux-designer.persona.md"
+  ],
+  "pack_instructions": "instructions.md",
+  "defaults": {
+    "triggers": {
+      "mentions": true,
+      "keywords": [],
+      "all_messages": false
+    },
+    "subscribe": [],
+    "thread_replies": true,
+    "broadcast_replies": false
+  }
+}

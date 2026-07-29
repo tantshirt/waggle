@@ -25,13 +25,13 @@ development_status:
   1-9-approve-a-gate-with-a-reaction-and-reconstruct-it-from-the-log: in-progress
   epic-1-retrospective: optional
 
-  epic-2: backlog
-  2-1-enumerate-any-method-installation: backlog
-  2-2-resolve-overrides-exactly-as-the-method-does: backlog
-  2-3-compile-every-agent-in-every-module: backlog
-  2-4-compile-both-kinds-of-menu-item: backlog
+  epic-2: in-progress
+  2-1-enumerate-any-method-installation: done
+  2-2-resolve-overrides-exactly-as-the-method-does: done
+  2-3-compile-every-agent-in-every-module: done
+  2-4-compile-both-kinds-of-menu-item: done
   2-5-see-exactly-what-a-compile-did: backlog
-  2-6-get-byte-identical-output-from-unchanged-input: backlog
+  2-6-get-byte-identical-output-from-unchanged-input: done
   2-7-provision-a-modules-rooms-from-template-data: backlog
   2-8-create-a-modules-canvases-from-templates: backlog
   2-9-drive-every-capability-from-the-command-line: backlog

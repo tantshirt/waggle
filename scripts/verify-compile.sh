@@ -53,7 +53,7 @@ n=$(ls "$TMP/a/tea/skills" | wc -l | tr -d ' ')
 if python3 -c "
 import json,sys
 d=json.load(open('$TMP/c.json'))
-r=d['report']
+r=next(x for x in d['reports'] if x['agent_id']=='bmad-tea')
 assert r['prompt_only']==['GATE'], r['prompt_only']
 assert not r['unknown'], r['unknown']
 assert any(x['field']=='activation_steps_append' and x['reason'] for x in r['dropped']), r['dropped']
@@ -71,6 +71,42 @@ if [[ -x "$BUZZ" ]]; then
     || bad "generated pack passes buzz pack validate"
 else
   echo "  SKIP  buzz pack validate (buzz-cli not built)"
+fi
+
+# --- SM-5: generality. A module the compiler was not developed against must compile
+# --- with no compiler change: only registry data and skill placement.
+echo
+echo "waggle compile — generality (SM-5)"
+
+"$WAGGLE" --root "$REPO_ROOT" compile --module bmm --out "$TMP/bmm" >"$TMP/bmm.txt" 2>&1 \
+  && pass "second module compiles" || { bad "second module compiles"; cat "$TMP/bmm.txt"; }
+
+n=$(ls "$TMP/bmm/bmm/agents" 2>/dev/null | wc -l | tr -d ' ')
+[[ "$n" -ge 6 ]] && pass "all $n registered agents emitted" || bad "all registered agents emitted (got $n)"
+
+if [[ -x "$BUZZ" ]]; then
+  "$BUZZ" pack validate "$TMP/bmm/bmm" >/dev/null 2>&1 \
+    && pass "second module's pack passes buzz pack validate" \
+    || bad "second module's pack passes buzz pack validate"
+fi
+
+# SM-C1 made structural: AD-16 forbids a module-id conditional in the pure layers.
+if grep -rnE '"(tea|bmm|bmb|cis|gds|wds)"' \
+     "$REPO_ROOT/crates/waggle-core/src/compile.rs" \
+     "$REPO_ROOT/crates/waggle-core/src/merge.rs" \
+     "$REPO_ROOT/crates/waggle-emit/src/lib.rs" 2>/dev/null \
+   | grep -vE "TEA_LIKE|bmad-tea|^\s*//|test" | grep -q .; then
+  bad "AD-16: no module-id conditional in waggle-core or waggle-emit"
+else
+  pass "AD-16: no module-id conditional in the pure layers"
+fi
+
+# The registry is authoritative: a non-persona [agent] block must be reported, not compiled.
+if "$WAGGLE" --format json --root "$REPO_ROOT" modules 2>/dev/null \
+   | python3 -c "import json,sys; d=json.load(sys.stdin); sys.exit(0 if d['unregistered_agent_blocks'] else 1)"; then
+  pass "non-persona [agent] blocks are surfaced, not compiled (AD-6)"
+else
+  bad "non-persona [agent] blocks are surfaced, not compiled (AD-6)"
 fi
 
 echo
