@@ -91,6 +91,32 @@ enum Command {
 
     /// List what the method installation registers: modules, agents, provenance.
     Modules,
+
+    /// Provision a module's channels and canvases into a running hive.
+    ///
+    /// Delegates creation to the substrate's own template mechanism, adding the
+    /// existence check the substrate does not perform (UP-10).
+    Provision {
+        /// Module code, e.g. `tea`.
+        #[arg(long)]
+        module: String,
+
+        /// Role whose identity performs the provisioning.
+        #[arg(long, default_value = "tea")]
+        role: String,
+
+        /// Compiled pack directory. Defaults to `<root>/packs/<module>`.
+        #[arg(long)]
+        pack: Option<PathBuf>,
+
+        /// Relay base URL.
+        #[arg(long, default_value = "http://localhost:3000")]
+        relay: String,
+
+        /// Path to the substrate CLI.
+        #[arg(long)]
+        buzz_cli: Option<PathBuf>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -227,7 +253,147 @@ fn main() -> ExitCode {
             run_compile(&root, module, agent.as_deref(), &out_dir, cli.format)
         }
         Command::Modules => run_modules(&root, cli.format),
+        Command::Provision {
+            ref module,
+            ref role,
+            ref pack,
+            ref relay,
+            ref buzz_cli,
+        } => {
+            let pack_dir = pack
+                .clone()
+                .unwrap_or_else(|| root.join("packs").join(module));
+            let cli_path = buzz_cli
+                .clone()
+                .unwrap_or_else(|| root.join("vendor/buzz/target/release/buzz"));
+            run_provision(&root, module, role, &pack_dir, relay, &cli_path, cli.format)
+        }
     }
+}
+
+#[derive(Serialize)]
+struct ProvisionedChannel {
+    template: String,
+    channel: String,
+    outcome: &'static str,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    id: String,
+    canvas_applied: bool,
+}
+
+#[derive(Serialize)]
+struct ProvisionReport {
+    module: String,
+    channels: Vec<ProvisionedChannel>,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_provision(
+    root: &std::path::Path,
+    module: &str,
+    role: &str,
+    pack_dir: &std::path::Path,
+    relay: &str,
+    buzz_cli: &std::path::Path,
+    format: Format,
+) -> ExitCode {
+    let templates_file = pack_dir.join("channel-templates.json");
+    if !templates_file.exists() {
+        // AD-6: a module with no templates provisions nothing and says so, rather than
+        // failing or silently doing nothing.
+        println!(
+            "module {module:?} ships no channel templates ({} absent) — nothing to provision",
+            templates_file.display()
+        );
+        return ExitCode::from(exit::OK);
+    }
+
+    let store: Vec<serde_json::Value> = match std::fs::read_to_string(&templates_file)
+        .map_err(|e| e.to_string())
+        .and_then(|raw| serde_json::from_str(&raw).map_err(|e| e.to_string()))
+    {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("error: {}: {e}", templates_file.display());
+            return ExitCode::from(exit::USER);
+        }
+    };
+
+    // AD-14: the secret is read inside the adapter boundary and never returned here.
+    let secret = match std::fs::read_to_string(root.join("keys").join(format!("{role}.nsec"))) {
+        Ok(s) => s.trim().to_string(),
+        Err(_) => {
+            eprintln!(
+                "error: no identity for role {role:?} — provision it first: \
+                 waggle identity provision --role {role}"
+            );
+            return ExitCode::from(exit::USER);
+        }
+    };
+
+    let existing = match waggle_hive::channels::existing_channel_names(buzz_cli, relay, &secret) {
+        Ok(e) => e,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::from(exit::UPSTREAM);
+        }
+    };
+
+    let mut out = Vec::new();
+    for t in &store {
+        let Some(template_name) = t.get("name").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        // The channel takes the template's name; the template is already module-prefixed.
+        match waggle_hive::channels::provision_channel(
+            buzz_cli,
+            relay,
+            &secret,
+            &templates_file,
+            template_name,
+            template_name,
+            &existing,
+        ) {
+            Ok(waggle_hive::channels::Provisioned::Created { id, canvas_applied }) => {
+                out.push(ProvisionedChannel {
+                    template: template_name.to_string(),
+                    channel: template_name.to_string(),
+                    outcome: "created",
+                    id,
+                    canvas_applied,
+                });
+            }
+            Ok(waggle_hive::channels::Provisioned::AlreadyExists { id }) => {
+                out.push(ProvisionedChannel {
+                    template: template_name.to_string(),
+                    channel: template_name.to_string(),
+                    outcome: "already-exists",
+                    id,
+                    canvas_applied: false,
+                });
+            }
+            Err(e) => {
+                eprintln!("error: {e}");
+                return ExitCode::from(exit::UPSTREAM);
+            }
+        }
+    }
+
+    let report = ProvisionReport {
+        module: module.to_string(),
+        channels: out,
+    };
+
+    match format {
+        Format::Json => emit(format, "provision", true, &report),
+        Format::Text => {
+            for c in &report.channels {
+                let canvas = if c.canvas_applied { " +canvas" } else { "" };
+                println!("{:<14} {}{}", c.outcome, c.channel, canvas);
+            }
+        }
+    }
+    ExitCode::from(exit::OK)
 }
 
 #[derive(Serialize)]
@@ -352,6 +518,7 @@ struct CompileOutput {
     pack_dir: String,
     files_written: Vec<String>,
     skills_copied: Vec<String>,
+    channel_templates: Vec<String>,
     reports: Vec<waggle_core::CompileReport>,
 }
 
@@ -441,12 +608,34 @@ fn run_compile(
         }
     }
 
+    // waggle's own template data, if the module ships any (AD-16: data, not code).
+    let templates_path = root.join("templates").join(module).join("channels.json");
+    let channel_sources: Option<Vec<waggle_emit::channels::ChannelTemplateSource>> =
+        if templates_path.exists() {
+            match std::fs::read_to_string(&templates_path)
+                .map_err(|e| e.to_string())
+                .and_then(|raw| serde_json::from_str(&raw).map_err(|e| e.to_string()))
+            {
+                Ok(v) => Some(v),
+                Err(e) => {
+                    eprintln!("error: {}: {e}", templates_path.display());
+                    return ExitCode::from(exit::USER);
+                }
+            }
+        } else {
+            None
+        };
+
+    let all_module_agents = waggle_method::registry::agents_for_module(&registry, module);
+
     let instructions = include_str!("../assets/instructions.md");
     let meta = waggle_emit::PackMeta {
         module,
         module_version: &module_version,
         skills_source: &root.join(tool_dir),
         instructions,
+        channel_templates: channel_sources.as_deref(),
+        module_agent_ids: &all_module_agents,
     };
 
     let outcome = match waggle_emit::emit_pack(out_dir, &packs, &meta) {
@@ -467,6 +656,7 @@ fn run_compile(
             .map(|p| p.display().to_string())
             .collect(),
         skills_copied: outcome.skills_copied,
+        channel_templates: outcome.channel_templates,
         reports,
     };
 
@@ -480,6 +670,11 @@ fn run_compile(
                 output.pack_dir
             );
             println!("  skills       {} copied", output.skills_copied.len());
+            if output.channel_templates.is_empty() {
+                println!("  channels     none (module ships no templates/{module}/channels.json)");
+            } else {
+                println!("  channels     {}", output.channel_templates.join(", "));
+            }
             for r in &output.reports {
                 let mut notes = Vec::new();
                 if !r.prompt_only.is_empty() {

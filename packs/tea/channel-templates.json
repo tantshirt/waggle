@@ -1,0 +1,17 @@
+[
+  {
+    "name": "tea-test-strategy",
+    "description": "Risk-based test strategy and the release gate for a story or epic.",
+    "channel_type": "stream",
+    "visibility": "open",
+    "canvas_template": "# Test strategy\n\n> Owned by the Test Architect. A gate decision without evidence in this document is not a gate decision.\n\n## Scope\n\nWhat is being gated, and at what altitude (story / epic / release).\n\n## Risk assessment\n\n| Area | Priority | Risk | Evidence |\n|---|---|---|---|\n|  | P1 |  |  |\n\nPriorities are `P0`-`P3`. Depth of testing scales with impact, not with habit.\n\n## Coverage\n\n| Requirement | Level | Test | Status |\n|---|---|---|---|\n|  | unit / integration / e2e |  |  |\n\nPrefer the lowest level that can catch the failure.\n\n## NFR evidence\n\n| Attribute | Target | Measured | Evidence |\n|---|---|---|---|\n| performance |  |  |  |\n| security |  |  |  |\n| reliability |  |  |  |\n\n## Gate\n\n**Verdict:** _pending_ - one of `PASS`, `CONCERNS`, `FAIL`, `WAIVED`.\n\n`CONCERNS` and `WAIVED` require a written rationale. A bare waiver is not an auditable\nrecord, and it is rejected at publish time.\n\n**Rationale:**\n\n**Approved by:** _a human reaction on the verdict event; the agent does not approve its own gate._\n",
+    "agents": {
+      "personas": [
+        {
+          "personaId": "bmad-tea"
+        }
+      ],
+      "teams": []
+    }
+  }
+]

@@ -7,6 +7,7 @@
 //! The output contract is `crates/buzz-persona/PERSONA_PACK_SPEC.md`, verified in Story 1.2
 //! and recorded in `docs/persona-pack-contract.md`.
 
+pub mod channels;
 pub mod workflow;
 
 use std::fmt::Write as _;
@@ -55,6 +56,12 @@ pub struct PackMeta<'a> {
     pub skills_source: &'a Path,
     /// Pack-level instructions, verbatim.
     pub instructions: &'a str,
+    /// waggle's own template data for this module, if any
+    /// (`templates/<module>/channels.json`). `None` means the module ships no
+    /// channel templates — reported, not an error (AD-6).
+    pub channel_templates: Option<&'a [channels::ChannelTemplateSource]>,
+    /// Agent ids the module registers, for filling template rosters.
+    pub module_agent_ids: &'a [String],
 }
 
 #[derive(Debug, Clone)]
@@ -62,6 +69,8 @@ pub struct EmitOutcome {
     pub pack_dir: PathBuf,
     pub files_written: Vec<PathBuf>,
     pub skills_copied: Vec<String>,
+    /// Channel template names emitted, in order. Empty when the module ships none.
+    pub channel_templates: Vec<String>,
 }
 
 /// Write the pack. The directory is created if absent; existing files are overwritten.
@@ -115,6 +124,20 @@ pub fn emit_pack(
     write(&gate_path, &gate_yaml)?;
     files.push(gate_path);
 
+    // --- channel-templates.json ---
+    // Delegated provisioning: Buzz reads this store directly via --templates-file, so
+    // waggle emits data rather than reimplementing channel and canvas creation.
+    let mut channel_templates = Vec::new();
+    if let Some(sources) = meta.channel_templates {
+        let store = channels::build_store(meta.module, sources, meta.module_agent_ids);
+        channel_templates = store.iter().map(|t| t.name.clone()).collect();
+        let json = channels::render(&store)
+            .expect("channel templates are plain data and always serialize");
+        let path = pack_dir.join("channel-templates.json");
+        write(&path, &json)?;
+        files.push(path);
+    }
+
     // --- skills/ ---
     // Copied verbatim: BMAD skills and Buzz pack skills are the same format, so this is
     // placement rather than translation (verified in Story 1.2).
@@ -157,6 +180,7 @@ pub fn emit_pack(
         pack_dir,
         files_written: files,
         skills_copied,
+        channel_templates,
     })
 }
 

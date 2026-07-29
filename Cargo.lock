@@ -1136,6 +1136,7 @@ name = "waggle-hive"
 version = "0.1.0"
 dependencies = [
  "nostr",
+ "serde_json",
  "thiserror",
  "waggle-core",
 ]
