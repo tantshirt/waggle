@@ -55,7 +55,9 @@ the log is consulted — which is the whole promise.
 | Version preflight, refuses outside the supported range | `waggle preflight` |
 | Agent identity provisioning, secrets never printed | `waggle identity provision --role tea` |
 | List identities (public data only) | `waggle identity list` |
-| Compile a module to a validated persona pack + gate workflow | `waggle compile --module tea --agent bmad-tea` |
+| Enumerate modules, agents, and provenance | `waggle modules` |
+| Compile a module to a validated persona pack + gate workflow | `waggle compile --module tea` |
+| Provision a module's channels and canvases, idempotently | `waggle provision --module tea` |
 | Publish an agent's profile under its own key | `waggle identity publish-profile --role tea --pack packs/tea` |
 
 ### What is not done
@@ -67,7 +69,8 @@ Honest accounting — see `docs/implementation-artifacts/sprint-status.yaml`.
 | A live agent generating its own verdict (1.7, 1.9) | LLM provider credentials; `buzz-acp` needs an agent runtime on PATH |
 | CI-built relay image (1.3) | A decision to publish images to a public registry |
 | Relay membership registration (1.5) | A stable relay signing key; the pubkey allowlist is off by default, so nothing needs it yet |
-| Modules beyond the pilot (Epic 2) | Nothing — this is the next real work |
+| Modules beyond the pilot | **Done.** `bmm` compiles — 6 agents, zero compiler changes (SM-5) |
+| Agent roster membership in channels | Same live-agent blocker: rosters report `no live instances` |
 
 Stories 1.8/1.9 were exercised with a verdict published by hand rather than generated
 by an agent. The gate *mechanics* are proven; the verdict's *author* was simulated.
@@ -95,8 +98,9 @@ You do **not** need Rust, Node, or pnpm installed — Buzz's Hermit supplies the
 **1. Installer / compiler (`waggle`)** — reads a BMAD installation and emits Buzz
 persona packs and workflow YAML. Deterministic and byte-reproducible.
 
-**2. Channel & canvas templates**, per module. *Not yet built — and Buzz already ships
-a `--template` mechanism that may cover most of it (see `docs/research-notes.md` §6.5).*
+**2. Channel & canvas templates**, per module — `templates/<module>/channels.json`
+compiles into the pack, and `waggle provision` delegates creation to the substrate while
+adding the idempotence it lacks (UP-10). Canvases come free in the same file.
 
 **3. Agent runtime config** — one keypair per role, scoped memberships, MCP config.
 *Identity and profile publication work; live sessions need credentials.*
@@ -105,8 +109,9 @@ a `--template` mechanism that may cover most of it (see `docs/research-notes.md`
 
 | Module | Status |
 |---|---|
-| `tea` | **Pilot — compiles, gate fires** |
-| `core`, `bmm`, `bmb` | Installed, not yet compiled |
+| `tea` | **Compiles, gate fires, channels + canvas provision** |
+| `bmm` | **Compiles — 6 agents, 2 channels. Proved SM-5: no compiler changes needed** |
+| `core`, `bmb` | Installed; `bmb` ships no persona agents |
 | `cis`, `gds`, `wds` | Not installed; deferred until the pattern generalizes |
 
 **Quality gates are Buzz approval gates.** A human reaction on an artifact event fires
@@ -124,7 +129,7 @@ Hexagonal — ports and adapters. Six crates:
 | `waggle-method` | Reads a BMAD installation. Read-only. |
 | `waggle-emit` | Renders packs and workflow YAML. Deterministic. |
 | `waggle-hive` | Talks to the relay. Never modifies it. |
-| `waggle-gate` | *(planned)* the approval seam |
+| `waggle-gate` | *(gate logic currently lives in `waggle-core::gate`)* |
 | `waggle-cli` | The only crate that wires the others |
 
 The binding decisions are `AD-1`…`AD-20` in
@@ -137,7 +142,7 @@ non-skippable.
 ## Verification
 
 ```bash
-cargo test --workspace                  # 62 tests
+cargo test --workspace                  # 84 tests
 cargo clippy --workspace --all-targets -- -D warnings
 
 ./scripts/verify-preflight.sh           # exit-code taxonomy
@@ -145,11 +150,15 @@ cargo clippy --workspace --all-targets -- -D warnings
 ./scripts/verify-pack-contract.sh       # pack validates AND validator rejects defects
 ./scripts/verify-compile.sh             # determinism, full accounting, AD-7
 ./scripts/verify-gate.sh                # end-to-end gate (needs a running relay)
+./scripts/verify-provision.sh           # channels + canvases, idempotence (needs a relay)
+./scripts/verify-cli.sh                 # command surface + exit-code taxonomy
 ```
 
 Each negative-tests itself: a check that only asserts the happy path can pass while
-the thing it guards is broken. Twice in this project a test passed for the wrong
-reason and was caught only by deliberately breaking the input.
+the thing it guards is broken. **Three times** in this project a test passed or failed
+for a reason unrelated to what it claimed to test, caught only by deliberately breaking
+the input. The portability lint, for example, is verified by poisoning a template with a
+forbidden kind and requiring the compile to fail.
 
 ## Documentation
 
