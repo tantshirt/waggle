@@ -293,10 +293,17 @@ record will name that person as approver.
 - **Impact on waggle:** FR-22 ("the gate record is self-contained and its signature
   verifies") is **not met**. Stories 1.8 and 1.9 are reopened. The mechanism works; the
   *attribution* does not.
-- **Our mitigation:** waggle must publish the gate record itself, signed by an agent
-  identity, deriving the approver from the reaction event it read directly — the
-  `waggle-hive::events` path built in Epic 3 already does exactly this for artifacts. The
-  relay-signed workflow record becomes a trigger, not the record of truth.
+- **Status update, FIXED in waggle 2026-07-29.** `waggle gate` now reads the reactions
+  itself, derives the approver from each reaction's **signature-bound `pubkey`** (never an
+  `actor` tag), checks it against the relay-signed admin list, and publishes the record
+  under waggle's own agent identity. Verified in the log: the record is signed by
+  `47e6e1db…` (the agent), not `79be667e…` (the relay), and its id recomputes.
+  The compiled workflow was demoted to an advisory **notice** that deliberately names no
+  approver, with a distinct `waggle-gate-notice` marker so a relay-signed advisory can
+  never be mistaken for the agent-signed record. Guarded by
+  `scripts/verify-gate-attribution.sh`.
+- **The upstream defect itself is unfixed** and still worth reporting: the workflow trigger
+  context trusts an `actor` tag with no relay-pubkey guard. waggle now routes around it.
 - **Candidate contribution (security):** add the `ingest.rs` relay-pubkey guard to the
   workflow trigger context. Small, and the correct code already exists two files away.
 

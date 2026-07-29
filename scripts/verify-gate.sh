@@ -2,7 +2,8 @@
 # End-to-end gate test (Stories 1.8/1.9, FR-19..FR-23) against a RUNNING relay.
 #
 # Proves the compiled workflow actually fires and that the resulting record is
-# self-contained enough to reconstruct the decision from the log alone (FR-22).
+# posts its advisory notice. FR-22's attribution is NOT tested here — the notice is
+# relay-signed and deliberately claims no approver. See verify-gate-attribution.sh.
 #
 # Requires: a relay on $RELAY, buzz-cli built, and a provisioned `tea` identity.
 set -uo pipefail
@@ -59,17 +60,17 @@ for _ in $(seq 1 10); do
   REC=$("$BUZZ" messages get --channel "$CH" 2>/dev/null | python3 -c "
 import sys,json
 for m in json.load(sys.stdin):
-    if m['content'].startswith('waggle-gate-record'):
+    if m['content'].startswith('waggle-gate-notice'):
         print(json.dumps(m)); break
 ")
   [[ -n "$REC" ]] && break
 done
 
 if [[ -z "$REC" ]]; then
-  bad "gate record published within 10s"
+  bad "gate notice published within 10s"
   exit 1
 fi
-pass "gate workflow fired and published a record"
+pass "gate workflow fired and published its advisory notice"
 
 # FR-22: the record alone must identify verdict, approver, and time.
 # Exported explicitly: relying on the caller's environment made this check silently
@@ -80,17 +81,22 @@ import json, sys, os
 rec = json.loads(os.environ['REC'])
 body = rec['content']
 ev = sys.argv[1]
+# The notice must cite the verdict and must NOT claim an approver: it is relay-signed,
+# and {{trigger.author}} is spoofable (UP-18). Attribution lives in the agent-signed
+# record produced by `waggle gate`, covered by verify-gate-attribution.sh.
 need = {
     'verdict-event: ' + ev: 'links the exact verdict event',
-    'approver: ': 'names the approving identity',
-    'approved-at: ': 'records when',
     'reaction: white_check_mark': 'records what triggered it',
+    'advisory': 'states plainly that it is not authoritative',
 }
 missing = [d for k, d in need.items() if k not in body]
 if missing:
-    print('  FAIL  gate record is self-contained (missing: %s)' % ', '.join(missing))
+    print('  FAIL  notice cites the verdict (missing: %s)' % ', '.join(missing))
     sys.exit(1)
-print('  PASS  gate record is self-contained (FR-22)')
+if 'approver: ' in body:
+    print('  FAIL  notice must not name an approver (UP-18: relay-signed and spoofable)')
+    sys.exit(1)
+print('  PASS  notice cites the verdict and claims no approver (UP-18)')
 PY
 [[ $? -eq 0 ]] || fail=1
 

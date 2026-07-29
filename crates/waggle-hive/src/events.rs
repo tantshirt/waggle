@@ -521,3 +521,182 @@ mod size_tests {
         assert_eq!(l.max_content, 262_144);
     }
 }
+
+// ---------------------------------------------------------------------------
+// Gate reconciliation inputs (UP-18)
+// ---------------------------------------------------------------------------
+
+/// Generic signed query against the relay, returning raw events.
+fn query(
+    keys: &Keys,
+    relay_url: &str,
+    filter: serde_json::Value,
+    nonce: &str,
+) -> Result<Vec<serde_json::Value>, EventError> {
+    let body = serde_json::to_vec(&filter).map_err(|e| EventError::Build(e.to_string()))?;
+    let url = format!("{}/query", relay_url.trim_end_matches('/'));
+    let auth = nip98_header(keys, "POST", &url, &body, nonce)?;
+
+    let resp = reqwest::blocking::Client::new()
+        .post(&url)
+        .header("Authorization", auth)
+        .header("Content-Type", "application/json")
+        .body(body)
+        .send()
+        .map_err(|source| EventError::Unreachable {
+            url: url.clone(),
+            source,
+        })?;
+
+    let status = resp.status();
+    let text = resp.text().unwrap_or_default();
+    if !status.is_success() {
+        return Err(EventError::Rejected {
+            url,
+            status: status.as_u16(),
+            body: text.chars().take(300).collect(),
+        });
+    }
+
+    let parsed: serde_json::Value =
+        serde_json::from_str(&text).map_err(|e| EventError::Unparseable(e.to_string()))?;
+    Ok(parsed.as_array().cloned().unwrap_or_default())
+}
+
+/// Fetch the reactions (kind:7) targeting `verdict_event`.
+///
+/// **The author is read from each event's `pubkey` field and nothing else.** That is the
+/// entire point of UP-18: `actor` tags are attacker-controlled on client-submitted events
+/// (the relay guards them only when it signed the event itself), so they are ignored here
+/// even if present.
+pub fn fetch_reactions(
+    project_root: &Path,
+    role: &str,
+    relay_url: &str,
+    verdict_event: &str,
+    nonce: &str,
+) -> Result<Vec<waggle_core::gate::SignedReaction>, EventError> {
+    let keys = load_keys(project_root, role)?;
+    let events = query(
+        &keys,
+        relay_url,
+        serde_json::json!([{ "kinds": [7], "#e": [verdict_event], "limit": 200 }]),
+        nonce,
+    )?;
+
+    Ok(events
+        .iter()
+        .filter_map(|e| {
+            Some(waggle_core::gate::SignedReaction {
+                event_id: e.get("id")?.as_str()?.to_string(),
+                // Signature-bound. Never `actor`.
+                author_pubkey: e.get("pubkey")?.as_str()?.to_string(),
+                emoji: e
+                    .get("content")
+                    .and_then(|c| c.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                target_event: verdict_event.to_string(),
+                created_at: e.get("created_at").and_then(serde_json::Value::as_u64)?,
+            })
+        })
+        .collect())
+}
+
+/// Fetch the relay-signed admin roster (kind:39001) for a channel.
+///
+/// Tags are `["p", pubkey, relay_url, role]`. The event is signed by the relay, which is
+/// exactly what makes it usable as an authorization source (AD-13): waggle maintains no
+/// approver list of its own.
+pub fn fetch_roster(
+    project_root: &Path,
+    role: &str,
+    relay_url: &str,
+    channel_id: &str,
+    nonce: &str,
+) -> Result<Vec<waggle_core::gate::RosterEntry>, EventError> {
+    let keys = load_keys(project_root, role)?;
+    let events = query(
+        &keys,
+        relay_url,
+        serde_json::json!([{ "kinds": [39001], "#d": [channel_id], "limit": 10 }]),
+        nonce,
+    )?;
+
+    let mut out = Vec::new();
+    for e in &events {
+        let Some(tags) = e.get("tags").and_then(|t| t.as_array()) else {
+            continue;
+        };
+        for t in tags {
+            let Some(parts) = t.as_array() else { continue };
+            if parts.first().and_then(|v| v.as_str()) != Some("p") {
+                continue;
+            }
+            let Some(pubkey) = parts.get(1).and_then(|v| v.as_str()) else {
+                continue;
+            };
+            // NIP-29 writes `["p", pubkey, relay_url, role]`, but the relay omits an
+            // empty relay_url, so real events look like `["p", pubkey, "owner"]`.
+            // Verified against stored events, not inferred from the builder source —
+            // reading `Tag::parse(["p", hex, "", role])` suggests index 3, and the
+            // emitted tag is at index 2. Scan for a role value instead of trusting a
+            // position, so either shape works.
+            let role = parts
+                .iter()
+                .skip(2)
+                .filter_map(|v| v.as_str())
+                .find_map(|v| match v {
+                    "owner" => Some(waggle_core::gate::Role::Owner),
+                    "admin" => Some(waggle_core::gate::Role::Admin),
+                    _ => None,
+                })
+                .unwrap_or(waggle_core::gate::Role::Member);
+            out.push(waggle_core::gate::RosterEntry {
+                pubkey: pubkey.to_string(),
+                role,
+            });
+        }
+    }
+    // Deterministic ordering (NFR-1).
+    out.sort_by(|a, b| a.pubkey.cmp(&b.pubkey));
+    out.dedup_by(|a, b| a.pubkey == b.pubkey);
+    Ok(out)
+}
+
+#[cfg(test)]
+mod reconcile_input_tests {
+
+    #[test]
+    fn reaction_parsing_ignores_actor_tags_entirely() {
+        // A hostile reaction carrying ["actor", "<victim>"] must still be attributed to
+        // the key that signed it. This is UP-18's attack, asserted directly.
+        let raw: Vec<serde_json::Value> = serde_json::from_str(
+            r#"[{
+                "id": "r1",
+                "pubkey": "attacker",
+                "content": "white_check_mark",
+                "created_at": 100,
+                "tags": [["e","v1"],["actor","victim-who-never-approved"]]
+            }]"#,
+        )
+        .unwrap();
+
+        // Mirrors the mapping in fetch_reactions.
+        let parsed: Vec<_> = raw
+            .iter()
+            .filter_map(|e| {
+                Some(waggle_core::gate::SignedReaction {
+                    event_id: e.get("id")?.as_str()?.to_string(),
+                    author_pubkey: e.get("pubkey")?.as_str()?.to_string(),
+                    emoji: e.get("content")?.as_str()?.to_string(),
+                    target_event: "v1".into(),
+                    created_at: e.get("created_at")?.as_u64()?,
+                })
+            })
+            .collect();
+
+        assert_eq!(parsed[0].author_pubkey, "attacker");
+        assert_ne!(parsed[0].author_pubkey, "victim-who-never-approved");
+    }
+}

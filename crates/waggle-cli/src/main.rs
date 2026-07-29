@@ -141,6 +141,35 @@ enum Command {
         relay: String,
     },
 
+    /// Reconcile a gate and publish the authoritative record (FR-19..FR-23, UP-18).
+    ///
+    /// Reads the reactions itself and derives the approver from each reaction's
+    /// signature-bound pubkey, then publishes the record under waggle's own identity.
+    /// The relay's workflow output is NOT the record: it is relay-signed and its
+    /// `{{trigger.author}}` is spoofable via an unguarded `actor` tag.
+    Gate {
+        #[arg(long)]
+        role: String,
+
+        #[arg(long)]
+        channel: String,
+
+        /// The verdict event being gated.
+        #[arg(long)]
+        verdict_event: String,
+
+        /// The verdict: PASS, CONCERNS, FAIL, or WAIVED.
+        #[arg(long)]
+        verdict: String,
+
+        /// Report the outcome without publishing a record.
+        #[arg(long)]
+        dry_run: bool,
+
+        #[arg(long, default_value = "http://localhost:3000")]
+        relay: String,
+    },
+
     /// Query the signed trail by tag, returning verifiable events (FR-22, FR-24).
     Trail {
         #[arg(long)]
@@ -358,6 +387,23 @@ fn main() -> ExitCode {
             run_compile(&root, module, agent.as_deref(), &out_dir, cli.format)
         }
         Command::Modules => run_modules(&root, cli.format),
+        Command::Gate {
+            ref role,
+            ref channel,
+            ref verdict_event,
+            ref verdict,
+            dry_run,
+            ref relay,
+        } => run_gate(
+            &root,
+            role,
+            channel,
+            verdict_event,
+            verdict,
+            dry_run,
+            relay,
+            cli.format,
+        ),
         Command::Patch {
             ref role,
             ref channel,
@@ -552,6 +598,156 @@ fn run_provision(
             }
         }
     }
+    ExitCode::from(exit::OK)
+}
+
+#[derive(Serialize)]
+struct GateReport {
+    verdict_event: String,
+    outcome: waggle_core::gate::GateOutcome,
+    /// Present only when a record was published.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    record_event: Option<String>,
+    /// The identity that signed the record — waggle's, never the relay's.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    record_signed_by: Option<String>,
+    roster_size: usize,
+    reactions_seen: usize,
+    /// Who the relay says may approve. Surfaced because a gate that will not approve is
+    /// almost always a roster question, and an operator should not have to guess.
+    roster: Vec<RosterView>,
+}
+
+#[derive(Serialize)]
+struct RosterView {
+    pubkey: String,
+    role: String,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_gate(
+    root: &std::path::Path,
+    role: &str,
+    channel: &str,
+    verdict_event: &str,
+    verdict: &str,
+    dry_run: bool,
+    relay: &str,
+    format: Format,
+) -> ExitCode {
+    let verdict: waggle_core::Verdict = match verdict.parse() {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::from(exit::USER);
+        }
+    };
+
+    let reactions = match waggle_hive::events::fetch_reactions(
+        root,
+        role,
+        relay,
+        verdict_event,
+        &uuid_like(),
+    ) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::from(exit::UPSTREAM);
+        }
+    };
+
+    let roster = match waggle_hive::events::fetch_roster(root, role, relay, channel, &uuid_like()) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::from(exit::UPSTREAM);
+        }
+    };
+
+    let outcome = waggle_core::gate::reconcile(verdict, &reactions, &roster);
+
+    let mut record_event = None;
+    let mut record_signed_by = None;
+
+    if !dry_run {
+        if let Some(body) = waggle_core::gate::render_gate_record(&outcome, verdict_event) {
+            let record = waggle_core::ArtifactEvent {
+                kind_marker: waggle_core::ArtifactKind::GateRecord,
+                channel_id: channel.to_string(),
+                artifact_type: Some("gate-record".into()),
+                module: None,
+                story: None,
+                priority: None,
+                references: vec![verdict_event.to_string()],
+                from_role: Some(role.to_string()),
+                to_role: None,
+                body,
+            };
+            match waggle_hive::events::publish_artifact(root, role, relay, &record, &uuid_like()) {
+                Ok(p) => {
+                    record_event = Some(p.event_id);
+                    record_signed_by = Some(p.pubkey);
+                }
+                Err(e) => {
+                    eprintln!("error: {e}");
+                    return ExitCode::from(exit::UPSTREAM);
+                }
+            }
+        }
+    }
+
+    let report = GateReport {
+        verdict_event: verdict_event.to_string(),
+        outcome,
+        record_event,
+        record_signed_by,
+        roster_size: roster.len(),
+        reactions_seen: reactions.len(),
+        roster: roster
+            .iter()
+            .map(|r| RosterView {
+                pubkey: r.pubkey.clone(),
+                role: format!("{:?}", r.role).to_lowercase(),
+            })
+            .collect(),
+    };
+
+    match format {
+        Format::Json => emit(format, "gate", true, &report),
+        Format::Text => match &report.outcome {
+            waggle_core::gate::GateOutcome::Approved {
+                verdict, approver, ..
+            } => {
+                println!("{verdict} approved by {approver}");
+                match &report.record_event {
+                    Some(id) => println!(
+                        "record {id}
+  signed by {} (waggle identity, not the relay)",
+                        report.record_signed_by.clone().unwrap_or_default()
+                    ),
+                    None => println!("(dry run — no record published)"),
+                }
+            }
+            waggle_core::gate::GateOutcome::Unauthorized {
+                verdict,
+                attempted_by,
+                required,
+            } => {
+                println!(
+                    "{verdict} NOT approved — {} reaction(s) from identities below {required:?}",
+                    attempted_by.len()
+                );
+                for a in attempted_by {
+                    println!("  unauthorized: {a}");
+                }
+            }
+            waggle_core::gate::GateOutcome::Pending { verdict } => {
+                println!("{verdict} pending — no approving reaction yet");
+            }
+        },
+    }
+
     ExitCode::from(exit::OK)
 }
 

@@ -46,13 +46,25 @@ verdict (CONCERNS, P1, with rationale)
            approved-at:   1785264314
 ```
 
-> ⚠️ **FR-22 is NOT satisfied, and an earlier version of this README claimed it was.**
-> An independent reviewer gate found that gate records are signed by the **relay keypair**,
-> not by the approver — the `approver:` line is an *unsigned assertion in the message body*.
-> Worse, `{{trigger.author}}` is resolved from an `actor` tag on the triggering event with
-> no relay-pubkey guard, so the named approver is **spoofable**. The relay's own ingest path
-> has exactly that guard; the workflow path lacks it. See `docs/upstream-issues.md` UP-18.
-> Stories 1.8 and 1.9 are reopened.
+**FR-22 is satisfied — but only after a reviewer gate caught that it wasn't.**
+An earlier version of this README claimed it, wrongly: gate records were being signed by the
+**relay keypair**, and the approver name came from an `actor` tag that any client can forge.
+Every test passed, because none of them asked *who signed it*.
+
+The fix (UP-18): `waggle gate` reads the reactions itself, takes the approver from each
+reaction's **signature-bound pubkey**, checks it against the relay-signed admin list, and
+publishes the record under waggle's own agent identity. The compiled workflow was demoted to
+an advisory *notice* that names no approver at all.
+
+```
+$ waggle gate --role tea --channel <ch> --verdict-event <id> --verdict CONCERNS
+CONCERNS approved by 47e6e1db…
+record 4dc6742c…
+  signed by 47e6e1db… (waggle identity, not the relay)
+```
+
+Verified in the log: signed by the agent, not the relay's `79be667e…`, and the id recomputes.
+Guarded by `scripts/verify-gate-attribution.sh`.
 
 ### What works today
 
@@ -79,8 +91,8 @@ Honest accounting — see `docs/implementation-artifacts/sprint-status.yaml`.
 | Agent roster membership in channels | Same live-agent blocker: rosters report `no live instances` |
 
 Stories 1.8/1.9 were exercised with a verdict published by hand rather than generated
-by an agent. The gate *mechanics* are proven; the verdict's *author* was simulated — and,
-per UP-18, the *approver's* attribution is not cryptographically bound either.
+by an agent. The gate mechanics and the approver's attribution are both real; only the
+verdict's *author* was simulated.
 
 ## Quick start
 
@@ -159,6 +171,8 @@ cargo clippy --workspace --all-targets -- -D warnings
 ./scripts/verify-gate.sh                # end-to-end gate (needs a running relay)
 ./scripts/verify-provision.sh           # channels + canvases, idempotence (needs a relay)
 ./scripts/verify-cli.sh                 # command surface + exit-code taxonomy
+./scripts/verify-trail.sh               # signed artifacts, handoffs, priorities (needs a relay)
+./scripts/verify-gate-attribution.sh    # WHO SIGNED IT — the assertion everything else missed
 ```
 
 Each negative-tests itself: a check that only asserts the happy path can pass while

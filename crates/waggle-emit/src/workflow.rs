@@ -10,7 +10,7 @@
 //! what FR-22 needs for log-only reconstruction.
 
 use serde::Serialize;
-use waggle_core::gate::{APPROVAL_EMOJI, GATE_RECORD_MARKER};
+use waggle_core::gate::{APPROVAL_EMOJI, GATE_NOTICE_MARKER};
 
 #[derive(Debug, Serialize)]
 pub struct WorkflowDef {
@@ -50,21 +50,28 @@ pub enum Action {
 pub fn gate_workflow(module: &str) -> WorkflowDef {
     // Template variables are resolved by the engine at fire time:
     // trigger.message_id, trigger.author, trigger.timestamp, trigger.emoji.
-    let record = format!(
-        "{GATE_RECORD_MARKER}\n\
+    // NOT the gate record. UP-18: the relay signs workflow output with its own keypair,
+    // and resolves {{trigger.author}} from an `actor` tag with no relay-pubkey guard, so
+    // anything written here is both mis-attributed and forgeable. This notice exists only
+    // to make the approval visible in the channel; the authoritative record is published
+    // by `waggle gate`, signed by an agent identity, with the approver derived from the
+    // reaction's signature-bound pubkey.
+    let notice = format!(
+        "{GATE_NOTICE_MARKER}\n\
          module: {module}\n\
          verdict-event: {{{{trigger.message_id}}}}\n\
-         approver: {{{{trigger.author}}}}\n\
-         approved-at: {{{{trigger.timestamp}}}}\n\
-         reaction: {{{{trigger.emoji}}}}"
+         reaction: {{{{trigger.emoji}}}}\n\
+         note: advisory only — this message is relay-signed and its author field is not \
+         trustworthy. Run `waggle gate --verdict-event <id>` to produce the signed record."
     );
 
     WorkflowDef {
         name: format!("waggle-gate-{module}"),
         description: format!(
-            "Release gate for the {module} module. A human reaction on a verdict event \
-             publishes a signed gate record. Approval authorization is checked against the \
-             relay-signed admin list before the record is trusted."
+            "Release gate notice for the {module} module. A human reaction on a verdict \
+             event posts an advisory notice. The authoritative, agent-signed gate record is \
+             produced by `waggle gate`, which derives the approver from the reaction's \
+             signature-bound pubkey and checks it against the relay-signed admin list."
         ),
         trigger: Trigger::ReactionAdded {
             emoji: Some(APPROVAL_EMOJI.to_string()),
@@ -74,8 +81,8 @@ pub fn gate_workflow(module: &str) -> WorkflowDef {
             // rejected at create time with "step id ... is invalid". Discovered against
             // the real engine, not the schema source.
             id: "publish_gate_record".to_string(),
-            name: "Publish the signed gate record".to_string(),
-            action: Action::SendMessage { text: record },
+            name: "Post an advisory approval notice (not the record — see UP-18)".to_string(),
+            action: Action::SendMessage { text: notice },
         }],
         enabled: true,
     }
@@ -173,16 +180,25 @@ mod tests {
     }
 
     #[test]
-    fn record_carries_everything_needed_to_reconstruct_the_gate() {
+    fn notice_cites_the_verdict_but_never_claims_an_approver() {
+        // UP-18: {{trigger.author}} is spoofable via an unguarded `actor` tag, so the
+        // workflow must not name an approver at all. Naming one would put a forgeable
+        // claim into the log under the relay's signature.
         let y = render(&gate_workflow("tea")).unwrap();
-        for needed in [
-            GATE_RECORD_MARKER,
-            "{{trigger.message_id}}",
-            "{{trigger.author}}",
-            "{{trigger.timestamp}}",
-        ] {
-            assert!(y.contains(needed), "gate record missing {needed}:\n{y}");
-        }
+        assert!(y.contains(GATE_NOTICE_MARKER));
+        assert!(y.contains("{{trigger.message_id}}"));
+        assert!(
+            !y.contains("{{trigger.author}}"),
+            "the workflow must not attribute an approver:\n{y}"
+        );
+        assert!(
+            !y.contains(waggle_core::gate::GATE_RECORD_MARKER),
+            "the workflow must not masquerade as the gate record:\n{y}"
+        );
+        assert!(
+            y.contains("advisory"),
+            "the notice must say it is advisory:\n{y}"
+        );
     }
 
     #[test]

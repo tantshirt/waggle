@@ -13,7 +13,7 @@ tracking_system: file-system
 story_location: "docs/implementation-artifacts"
 
 development_status:
-  epic-1: in-progress  # 1.8/1.9 reopened by UP-18
+  epic-1: in-progress  # 1.3 unblocked, 1.5/1.7 need credentials
   1-1-stand-up-a-hive-and-post-one-signed-message: done
   1-2-validate-the-persona-pack-contract-against-a-real-pack: done
   1-3-bring-up-a-hive-from-a-pinned-ci-built-image: backlog  # UNBLOCKED: ghcr.io/block/buzz is public (UP-08 withdrawn); pull, do not build
@@ -21,8 +21,8 @@ development_status:
   1-5-give-the-test-architect-its-own-identity-in-the-hive: in-progress
   1-6-compile-murats-descriptor-into-a-persona-pack: done
   1-7-see-the-test-architect-present-as-a-hive-member: in-progress
-  1-8-compile-the-tea-release-gate-into-a-workflow: review  # REOPENED by UP-18: gate records are relay-signed, approver spoofable
-  1-9-approve-a-gate-with-a-reaction-and-reconstruct-it-from-the-log: in-progress  # REOPENED by UP-18: FR-22 NOT met
+  1-8-compile-the-tea-release-gate-into-a-workflow: done  # workflow demoted to advisory notice (UP-18)
+  1-9-approve-a-gate-with-a-reaction-and-reconstruct-it-from-the-log: done  # FR-22 now satisfied: agent-signed record, verified in the log
   epic-1-retrospective: optional
 
   epic-2: done
