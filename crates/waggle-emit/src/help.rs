@@ -145,10 +145,7 @@ pub fn render_help_canvas(rows: &[HelpRow]) -> String {
 }
 
 /// Replace or set the `help` channel's canvas from the CSV catalog.
-pub fn enrich_help_canvas(
-    store: &mut [crate::channels::ChannelTemplateRecord],
-    rows: &[HelpRow],
-) {
+pub fn enrich_help_canvas(store: &mut [crate::channels::ChannelTemplateRecord], rows: &[HelpRow]) {
     let canvas = render_help_canvas(rows);
     for rec in store.iter_mut() {
         if rec.name.eq_ignore_ascii_case("help") {

@@ -54,7 +54,10 @@ fn dirs_home() -> Option<PathBuf> {
 /// Symlink every skill under `project_skills` into `target_dir`.
 ///
 /// Skips real directories that are not listed in `.waggle-managed`.
-pub fn publish_global(project_skills: &Path, target_dir: &Path) -> Result<PublishReport, SkillsError> {
+pub fn publish_global(
+    project_skills: &Path,
+    target_dir: &Path,
+) -> Result<PublishReport, SkillsError> {
     if !project_skills.is_dir() {
         return Err(SkillsError::NoSource(project_skills.to_path_buf()));
     }
@@ -155,9 +158,7 @@ fn ensure_symlink(src: &Path, dst: &Path, was_managed: bool) -> Result<EnsureOut
             let resolved = if target.is_absolute() {
                 target
             } else {
-                dst.parent()
-                    .unwrap_or_else(|| Path::new("."))
-                    .join(target)
+                dst.parent().unwrap_or_else(|| Path::new(".")).join(target)
             };
             let resolved = fs::canonicalize(&resolved).unwrap_or(resolved);
             if resolved == src_canon {
@@ -208,10 +209,7 @@ fn symlink_dir(src: &Path, dst: &Path) -> Result<(), SkillsError> {
         // surface a clear skip rather than panicking.
         Err(SkillsError::Io {
             path: dst.to_path_buf(),
-            source: io::Error::new(
-                io::ErrorKind::Unsupported,
-                "symlink publish requires unix",
-            ),
+            source: io::Error::new(io::ErrorKind::Unsupported, "symlink publish requires unix"),
         })
     }
 }

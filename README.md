@@ -4,7 +4,7 @@
 
 Waggle is a self-hostable, [Nostr](https://github.com/nostr-protocol/nips)-based team workspace where every agent from the [BMAD Method](https://github.com/bmad-code-org/BMAD-METHOD) runs as a first-class member with its own keypair, and every artifact, handoff, and quality gate is a signed event in one auditable log.
 
-It is a **distribution**, not a fork. Waggle self-hosts stock [Buzz](https://github.com/block/buzz) from upstream and adds a thin compilation and configuration layer on top. The Buzz codebase is treated as an external service and is never modified.
+It is a **distribution**, not a fork. Waggle self-hosts stock [Buzz](https://github.com/block/buzz) from upstream and adds a thin compilation and configuration layer on top. The Buzz codebase is treated as an external service and is never modified. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the authoritative architecture pointer.
 
 > **Not affiliated with BMad Code, LLC.** Waggle is an independent, community distribution that is *compatible with* the BMAD Method™. "BMad", "BMad Method", and related marks are trademarks of BMad Code, LLC. See [NOTICE](NOTICE).
 

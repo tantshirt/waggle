@@ -4,8 +4,8 @@
 //! bounds, relay URL. Does **not** start an agent process — that requires an ACP
 //! runtime and LLM credentials on the operator's machine (Story 1.7 residual).
 //!
-//! Publishing a kind:30177 managed-agent record is headless and does not need a
-//! live session (see review F-12). Secrets never appear in the projection.
+//! Publishing kind:30175 (persona definition) and kind:30177 (managed-agent instance)
+//! is headless and owner-authored (NIP-AP). Secrets never appear in the projection.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -19,6 +19,12 @@ use crate::identity::{self, IdentityError};
 /// Default session concurrency ceiling (NFR-8). Bounded; matches buzz-acp's
 /// documented comfort range rather than its hard max of 32.
 pub const DEFAULT_MAX_SESSIONS: u32 = 8;
+
+const KIND_PERSONA: u16 = 30_175;
+const KIND_MANAGED_AGENT: u16 = 30_177;
+
+/// Valid Buzz `respond_to` wire values (NIP-AP).
+pub const RESPOND_TO_VALUES: &[&str] = &["owner-only", "allowlist", "anyone"];
 
 #[derive(Debug, thiserror::Error)]
 pub enum RuntimeError {
@@ -43,6 +49,17 @@ pub enum RuntimeError {
 
     #[error("buzz-cli failed adding channel member: {0}")]
     ChannelMemberFailed(String),
+
+    #[error(
+        "owner secret required for publishing personas/managed-agents — set BUZZ_PRIVATE_KEY or WAGGLE_OWNER_NSEC"
+    )]
+    OwnerSecretMissing,
+
+    #[error("owner secret is not a valid secret key: {0}")]
+    OwnerSecretMalformed(String),
+
+    #[error("invalid respond_to {0:?} — expected one of: owner-only, allowlist, anyone")]
+    InvalidRespondTo(String),
 }
 
 /// Machine-readable runtime configuration for one role (FR-13).
@@ -61,6 +78,15 @@ pub struct RuntimeConfig {
     pub acp_agent_command_env: String,
     /// Documented env vars the operator must supply for a live turn.
     pub required_env: Vec<String>,
+}
+
+/// Parsed pack persona used for owner-authored 30175/30177 publication.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PackPersona {
+    pub display_name: String,
+    pub description: String,
+    /// Markdown body after the closing `---` — the real system prompt.
+    pub body: String,
 }
 
 /// Emit runtime configuration for `role` against a compiled pack.
@@ -125,72 +151,123 @@ pub fn emit_config(
     Ok((cfg, out_path))
 }
 
-/// Publish a kind:30177 managed-agent record for the role (headless; F-12).
+/// Resolve the hive owner secret used to author 30175/30177.
 ///
-/// Content is the opt-IN projection only — never secrets, env vars, or runtime
-/// blobs. The `d` tag is the agent's 64-hex pubkey.
-pub fn publish_managed_agent(
-    project_root: &Path,
-    role: &str,
-    relay_url: &str,
+/// Prefers `WAGGLE_OWNER_NSEC`, then `BUZZ_PRIVATE_KEY` — the same principal used
+/// as `BUZZ_PRIVATE_KEY` for channel provision.
+pub fn load_owner_keys() -> Result<Keys, RuntimeError> {
+    let secret = std::env::var("WAGGLE_OWNER_NSEC")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .or_else(|| {
+            std::env::var("BUZZ_PRIVATE_KEY")
+                .ok()
+                .filter(|s| !s.trim().is_empty())
+        })
+        .ok_or(RuntimeError::OwnerSecretMissing)?;
+    Keys::parse(secret.trim()).map_err(|e| RuntimeError::OwnerSecretMalformed(e.to_string()))
+}
+
+/// Validate a Buzz `respond_to` wire value.
+pub fn validate_respond_to(value: &str) -> Result<&str, RuntimeError> {
+    if RESPOND_TO_VALUES.contains(&value) {
+        Ok(value)
+    } else {
+        Err(RuntimeError::InvalidRespondTo(value.to_string()))
+    }
+}
+
+/// Slim definition-linked kind:30177 content (NIP-AP). Omits definition-level fields.
+pub fn managed_agent_content(
     display_name: &str,
-    system_prompt: &str,
     persona_id: &str,
     max_sessions: u32,
-    nonce: &str,
-) -> Result<Published, RuntimeError> {
-    let id = identity::load_public(project_root, role)?;
-    let sec_path = identity::key_dir(project_root).join(format!("{role}.nsec"));
-    if !sec_path.exists() {
-        return Err(IdentityError::NotProvisioned {
-            role: role.to_string(),
-        }
-        .into());
-    }
-    let secret = fs::read_to_string(&sec_path)
-        .map_err(|e| IdentityError::Malformed {
-            path: sec_path.clone(),
-            reason: e.to_string(),
-        })?
-        .trim()
-        .to_string();
-    let keys = Keys::parse(&secret).map_err(|e| IdentityError::Malformed {
-        path: sec_path,
-        reason: format!("not a valid secret key ({e})"),
-    })?;
-
-    let content = serde_json::json!({
+    respond_to: &str,
+) -> Result<String, RuntimeError> {
+    let respond_to = validate_respond_to(respond_to)?;
+    Ok(serde_json::json!({
         "name": display_name,
         "persona_id": persona_id,
-        "system_prompt": system_prompt,
         "parallelism": max_sessions.max(1),
-        "respond_to": "mentions",
+        "respond_to": respond_to,
     })
-    .to_string();
+    .to_string())
+}
 
-    if content.contains(&secret) {
+/// Kind:30175 persona definition content. `system_prompt` is the compiled body.
+pub fn persona_definition_content(display_name: &str, system_prompt: &str) -> String {
+    serde_json::json!({
+        "display_name": display_name,
+        "system_prompt": system_prompt,
+    })
+    .to_string()
+}
+
+/// Read display_name, description, and markdown body from a pack persona file.
+pub fn read_pack_persona_file(path: &Path) -> Result<PackPersona, RuntimeError> {
+    let text = fs::read_to_string(path).map_err(|e| RuntimeError::BadPack {
+        path: path.to_path_buf(),
+        reason: e.to_string(),
+    })?;
+
+    let mut lines = text.lines();
+    let first = lines.next().unwrap_or("").trim();
+    if first != "---" {
         return Err(RuntimeError::BadPack {
-            path: project_root.to_path_buf(),
-            reason: "managed-agent projection would embed secret key material".into(),
+            path: path.to_path_buf(),
+            reason: "missing opening frontmatter delimiter".into(),
         });
     }
 
-    const KIND_MANAGED_AGENT: u16 = 30_177;
-    let event = EventBuilder::new(Kind::Custom(KIND_MANAGED_AGENT), content)
-        .tags(vec![
-            Tag::parse(["d", &id.public_key_hex]).map_err(|e| EventError::Build(e.to_string()))?,
-        ])
-        .sign_with_keys(&keys)
-        .map_err(|e| EventError::Build(e.to_string()))?;
+    let mut display_name = None;
+    let mut description = None;
+    let mut closed = false;
+    let mut body_lines = Vec::new();
+    for line in lines {
+        if !closed {
+            if line.trim() == "---" {
+                closed = true;
+                continue;
+            }
+            if let Some(v) = line.strip_prefix("display_name:") {
+                display_name = Some(v.trim().trim_matches('"').to_string());
+            } else if let Some(v) = line.strip_prefix("description:") {
+                description = Some(v.trim().trim_matches('"').to_string());
+            }
+        } else {
+            body_lines.push(line);
+        }
+    }
+    if !closed {
+        return Err(RuntimeError::BadPack {
+            path: path.to_path_buf(),
+            reason: "missing closing frontmatter delimiter".into(),
+        });
+    }
 
+    Ok(PackPersona {
+        display_name: display_name.ok_or_else(|| RuntimeError::BadPack {
+            path: path.to_path_buf(),
+            reason: "missing display_name".into(),
+        })?,
+        description: description.unwrap_or_default(),
+        body: body_lines.join("\n").trim().to_string(),
+    })
+}
+
+fn post_signed_event(
+    keys: &Keys,
+    event: nostr::Event,
+    relay_url: &str,
+    nonce: &str,
+) -> Result<Published, RuntimeError> {
     let event_id = event.id.to_hex();
     let pubkey = event.pubkey.to_hex();
     let body = serde_json::to_vec(&event).map_err(|e| EventError::Build(e.to_string()))?;
     let url = format!("{}/events", relay_url.trim_end_matches('/'));
-    let auth = nip98_header(&keys, "POST", &url, &body, nonce)?;
+    let auth = nip98_header(keys, "POST", &url, &body, nonce)?;
 
-    let client = reqwest::blocking::Client::new();
-    let resp = client
+    let resp = crate::events::http_client()
         .post(&url)
         .header("Authorization", auth)
         .header("Content-Type", "application/json")
@@ -202,7 +279,7 @@ pub fn publish_managed_agent(
         })?;
 
     let status = resp.status();
-    let text = resp.text().unwrap_or_default();
+    let text = crate::events::response_text_capped(resp, &url, crate::events::MAX_HTTP_JSON_BYTES)?;
     if !status.is_success() {
         return Err(EventError::Rejected {
             url,
@@ -217,6 +294,118 @@ pub fn publish_managed_agent(
         pubkey,
         transport: Transport::Inline,
     })
+}
+
+/// Publish a kind:30175 persona definition, signed by the hive owner.
+pub fn publish_persona_definition(
+    owner: &Keys,
+    relay_url: &str,
+    persona_id: &str,
+    display_name: &str,
+    system_prompt: &str,
+    nonce: &str,
+) -> Result<Published, RuntimeError> {
+    let content = persona_definition_content(display_name, system_prompt);
+    let secret_hex = owner.secret_key().to_secret_hex();
+    if content.contains(&secret_hex) {
+        return Err(RuntimeError::BadPack {
+            path: PathBuf::from("persona"),
+            reason: "persona projection would embed secret key material".into(),
+        });
+    }
+
+    let event = EventBuilder::new(Kind::Custom(KIND_PERSONA), content)
+        .tags(vec![
+            Tag::parse(["d", persona_id]).map_err(|e| EventError::Build(e.to_string()))?
+        ])
+        .sign_with_keys(owner)
+        .map_err(|e| EventError::Build(e.to_string()))?;
+
+    post_signed_event(owner, event, relay_url, nonce)
+}
+
+/// Publish a kind:30177 managed-agent instance, signed by the hive **owner**.
+///
+/// The `d` tag is the agent's pubkey. Content is slim / definition-linked when
+/// `persona_id` is set (NIP-AP).
+#[allow(clippy::too_many_arguments)]
+pub fn publish_managed_agent(
+    project_root: &Path,
+    agent_role: &str,
+    owner: &Keys,
+    relay_url: &str,
+    display_name: &str,
+    persona_id: &str,
+    max_sessions: u32,
+    respond_to: &str,
+    nonce: &str,
+) -> Result<Published, RuntimeError> {
+    let id = identity::load_public(project_root, agent_role)?;
+    let content = managed_agent_content(display_name, persona_id, max_sessions, respond_to)?;
+    let secret_hex = owner.secret_key().to_secret_hex();
+    if content.contains(&secret_hex) {
+        return Err(RuntimeError::BadPack {
+            path: project_root.to_path_buf(),
+            reason: "managed-agent projection would embed secret key material".into(),
+        });
+    }
+
+    let event = EventBuilder::new(Kind::Custom(KIND_MANAGED_AGENT), content)
+        .tags(vec![
+            Tag::parse(["d", &id.public_key_hex]).map_err(|e| EventError::Build(e.to_string()))?
+        ])
+        .sign_with_keys(owner)
+        .map_err(|e| EventError::Build(e.to_string()))?;
+
+    // Coordinate is (30177, owner_pubkey, d=agent_pubkey) — required for Buzz
+    // `authors: [owner]` roster resolution.
+    debug_assert_eq!(event.pubkey, owner.public_key());
+
+    post_signed_event(owner, event, relay_url, nonce)
+}
+
+/// Publish 30175 then slim 30177 for one pack persona / agent role.
+#[allow(clippy::too_many_arguments)]
+pub fn publish_persona_and_agent(
+    project_root: &Path,
+    agent_role: &str,
+    pack_dir: &Path,
+    persona_id: &str,
+    relay_url: &str,
+    max_sessions: u32,
+    respond_to: &str,
+    nonce: &str,
+) -> Result<(Published, Published), RuntimeError> {
+    let owner = load_owner_keys()?;
+    let persona_path = pack_dir
+        .join("agents")
+        .join(format!("{persona_id}.persona.md"));
+    let persona = read_pack_persona_file(&persona_path)?;
+    let prompt = if persona.body.is_empty() {
+        persona.description.clone()
+    } else {
+        persona.body.clone()
+    };
+    let def = publish_persona_definition(
+        &owner,
+        relay_url,
+        persona_id,
+        &persona.display_name,
+        &prompt,
+        nonce,
+    )?;
+    let agent = publish_managed_agent(
+        project_root,
+        agent_role,
+        &owner,
+        relay_url,
+        &persona.display_name,
+        persona_id,
+        max_sessions,
+        respond_to,
+        &format!("{nonce}-agent"),
+    )?;
+    Ok((def, agent))
 }
 
 /// Add the role's pubkey to a channel roster via `buzz channels add-member`.
@@ -275,7 +464,7 @@ mod tests {
         fs::create_dir_all(pack.join("agents")).unwrap();
         fs::write(
             pack.join("agents/bmad-tea.persona.md"),
-            "---\nname: bmad-tea\ndisplay_name: Murat\ndescription: x\n---\n",
+            "---\nname: bmad-tea\ndisplay_name: Murat\ndescription: x\n---\nbody\n",
         )
         .unwrap();
 
@@ -314,5 +503,79 @@ mod tests {
         )
         .unwrap_err();
         assert!(matches!(err, RuntimeError::PackMissing(_)));
+    }
+
+    #[test]
+    fn managed_agent_content_is_slim_and_valid() {
+        let raw = managed_agent_content("Murat", "bmad-tea", 4, "anyone").unwrap();
+        let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(v["persona_id"], "bmad-tea");
+        assert_eq!(v["respond_to"], "anyone");
+        assert_eq!(v["parallelism"], 4);
+        assert!(v.get("system_prompt").is_none());
+        assert!(v.get("model").is_none());
+        assert!(v.get("provider").is_none());
+    }
+
+    #[test]
+    fn managed_agent_content_rejects_mentions() {
+        let err = managed_agent_content("x", "y", 1, "mentions").unwrap_err();
+        assert!(matches!(err, RuntimeError::InvalidRespondTo(_)));
+    }
+
+    #[test]
+    fn owner_signed_30177_uses_owner_pubkey_and_agent_d_tag() {
+        let root = tmp("owner-sign");
+        let agent = provision(&root, "tea", false).unwrap();
+        let owner = Keys::generate();
+
+        let content = managed_agent_content("Murat", "bmad-tea", 8, "owner-only").unwrap();
+        let event = EventBuilder::new(Kind::Custom(KIND_MANAGED_AGENT), content)
+            .tags(vec![Tag::parse(["d", &agent.public_key_hex]).unwrap()])
+            .sign_with_keys(&owner)
+            .unwrap();
+
+        assert_eq!(event.pubkey.to_hex(), owner.public_key().to_hex());
+        assert_ne!(event.pubkey.to_hex(), agent.public_key_hex);
+        let d = event
+            .tags
+            .iter()
+            .find_map(|t| {
+                let s = t.clone().to_vec();
+                if s.first().map(String::as_str) == Some("d") {
+                    s.get(1).cloned()
+                } else {
+                    None
+                }
+            })
+            .unwrap();
+        assert_eq!(d, agent.public_key_hex);
+
+        // Buzz-style authors=[owner] filter would match this event.
+        assert_eq!(event.pubkey, owner.public_key());
+    }
+
+    #[test]
+    fn read_pack_persona_uses_body_as_prompt() {
+        let root = tmp("persona-body");
+        let path = root.join("x.persona.md");
+        fs::write(
+            &path,
+            "---\ndisplay_name: Murat\ndescription: short blurb\n---\n# Real prompt\n\nDo the work.\n",
+        )
+        .unwrap();
+        let p = read_pack_persona_file(&path).unwrap();
+        assert_eq!(p.display_name, "Murat");
+        assert_eq!(p.description, "short blurb");
+        assert!(p.body.contains("Real prompt"));
+        assert!(!p.body.contains("display_name"));
+    }
+
+    #[test]
+    fn persona_definition_content_carries_system_prompt() {
+        let raw = persona_definition_content("Murat", "# body");
+        let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(v["display_name"], "Murat");
+        assert_eq!(v["system_prompt"], "# body");
     }
 }

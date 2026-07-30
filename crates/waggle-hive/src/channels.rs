@@ -84,26 +84,7 @@ pub fn existing_channel_names(
         ));
     }
 
-    let parsed: serde_json::Value = serde_json::from_slice(&out.stdout)
-        .map_err(|e| ChannelError::Unparseable(e.to_string()))?;
-
-    Ok(parsed
-        .as_array()
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|c| {
-                    let name = c.get("name")?.as_str()?.to_ascii_lowercase();
-                    let id = c
-                        .get("id")
-                        .or_else(|| c.get("channel_id"))
-                        .and_then(|v| v.as_str())
-                        .unwrap_or_default()
-                        .to_string();
-                    Some((name, id))
-                })
-                .collect()
-        })
-        .unwrap_or_default())
+    parse_channel_list_json(&out.stdout)
 }
 
 /// Create one channel from a template, unless a channel of that name already exists.
@@ -233,11 +214,13 @@ pub fn refresh_channel(
                     stderr: e.to_string(),
                 })?;
         }
-        let out = child.wait_with_output().map_err(|e| ChannelError::CreateFailed {
-            name: channel_id.to_string(),
-            template: "canvas set".into(),
-            stderr: e.to_string(),
-        })?;
+        let out = child
+            .wait_with_output()
+            .map_err(|e| ChannelError::CreateFailed {
+                name: channel_id.to_string(),
+                template: "canvas set".into(),
+                stderr: e.to_string(),
+            })?;
         if !out.status.success() {
             return Err(ChannelError::CreateFailed {
                 name: channel_id.to_string(),
@@ -282,25 +265,12 @@ pub fn add_member(
             source,
         })?;
 
-    if out.status.success() {
-        return Ok(());
-    }
-    let stderr = String::from_utf8_lossy(&out.stderr).to_ascii_lowercase();
-    let stdout = String::from_utf8_lossy(&out.stdout).to_ascii_lowercase();
-    let combined = format!("{stdout}{stderr}");
-    // Already-a-member / duplicate paths vary by substrate version.
-    if combined.contains("already")
-        || combined.contains("exists")
-        || combined.contains("duplicate")
-        || combined.contains("missing p tag")
-    {
-        return Ok(());
-    }
-    Err(ChannelError::CreateFailed {
-        name: channel_id.to_string(),
-        template: "add-member".into(),
-        stderr: String::from_utf8_lossy(&out.stderr).trim().to_string(),
-    })
+    classify_add_member_failure(
+        channel_id,
+        out.status.success(),
+        &String::from_utf8_lossy(&out.stdout),
+        &String::from_utf8_lossy(&out.stderr),
+    )
 }
 
 /// Ensure every pubkey is a member of the channel. Reports failures without aborting.
@@ -351,6 +321,71 @@ pub fn skipped_personas(create_stdout: &str) -> Vec<(String, String)> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+fn value_kind(v: &serde_json::Value) -> &'static str {
+    match v {
+        serde_json::Value::Null => "null",
+        serde_json::Value::Bool(_) => "bool",
+        serde_json::Value::Number(_) => "number",
+        serde_json::Value::String(_) => "string",
+        serde_json::Value::Array(_) => "array",
+        serde_json::Value::Object(_) => "object",
+    }
+}
+
+/// Parse `channels list` stdout. Non-array JSON is an error (not an empty list).
+fn parse_channel_list_json(stdout: &[u8]) -> Result<Vec<(String, String)>, ChannelError> {
+    let parsed: serde_json::Value =
+        serde_json::from_slice(stdout).map_err(|e| ChannelError::Unparseable(e.to_string()))?;
+    let arr = parsed.as_array().ok_or_else(|| {
+        ChannelError::Unparseable(format!(
+            "channels list expected a JSON array, got {}",
+            value_kind(&parsed)
+        ))
+    })?;
+    Ok(arr
+        .iter()
+        .filter_map(|c| {
+            let name = c.get("name")?.as_str()?.to_ascii_lowercase();
+            let id = c
+                .get("id")
+                .or_else(|| c.get("channel_id"))
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_string();
+            Some((name, id))
+        })
+        .collect())
+}
+
+/// Classify add-member CLI outcome.
+///
+/// Already-a-member / duplicate paths vary by substrate version. Do **not** treat
+/// `"missing p tag"` as success — that is a real protocol failure.
+fn classify_add_member_failure(
+    channel_id: &str,
+    success: bool,
+    stdout: &str,
+    stderr: &str,
+) -> Result<(), ChannelError> {
+    if success {
+        return Ok(());
+    }
+    let combined = format!(
+        "{}{}",
+        stdout.to_ascii_lowercase(),
+        stderr.to_ascii_lowercase()
+    );
+    if combined.contains("already") || combined.contains("exists") || combined.contains("duplicate")
+    {
+        return Ok(());
+    }
+    Err(ChannelError::CreateFailed {
+        name: channel_id.to_string(),
+        template: "add-member".into(),
+        stderr: stderr.trim().to_string(),
+    })
 }
 
 #[cfg(test)]
@@ -411,5 +446,50 @@ mod tests {
         assert!(skipped_personas("").is_empty());
         assert!(skipped_personas("not json").is_empty());
         assert!(skipped_personas(r#"{"status":"ok"}"#).is_empty());
+    }
+
+    #[test]
+    fn parse_channel_list_rejects_non_array_json() {
+        let err = parse_channel_list_json(br#"{"channels":[]}"#).unwrap_err();
+        assert!(
+            matches!(err, ChannelError::Unparseable(_)),
+            "object must not look like an empty channel list: {err}"
+        );
+        assert!(err.to_string().contains("JSON array"));
+    }
+
+    #[test]
+    fn parse_channel_list_accepts_array() {
+        let got = parse_channel_list_json(
+            br#"[{"name":"Planning","id":"abc"},{"name":"help","channel_id":"xyz"}]"#,
+        )
+        .unwrap();
+        assert_eq!(
+            got,
+            vec![
+                ("planning".into(), "abc".into()),
+                ("help".into(), "xyz".into())
+            ]
+        );
+    }
+
+    #[test]
+    fn missing_p_tag_is_not_idempotent_success() {
+        // Simulated substrate failure — must surface, not Ok(()).
+        let err = classify_add_member_failure(
+            "abc",
+            false,
+            "",
+            "error: missing p tag on membership event",
+        );
+        assert!(err.is_err(), "missing p tag must not be treated as success");
+    }
+
+    #[test]
+    fn already_member_stderr_is_idempotent_success() {
+        assert!(
+            classify_add_member_failure("abc", false, "", "member already exists in channel")
+                .is_ok()
+        );
     }
 }

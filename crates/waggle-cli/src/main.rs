@@ -3,24 +3,20 @@
 //! **AD-20:** every command is machine-first. Structured output on stdout, diagnostics on
 //! stderr, no interactive input required, and a fixed exit-code taxonomy.
 
+mod commands;
+mod common;
+mod exit;
+mod output;
+
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{Parser, Subcommand};
 use serde::Serialize;
 use waggle_core::{Compatibility, VersionRange};
 
-/// AD-20's exit-code taxonomy. Mirrors buzz-cli's shape so the two compose in scripts.
-mod exit {
-    /// Everything succeeded.
-    pub const OK: u8 = 0;
-    /// The caller asked for something impossible — bad flag, missing input.
-    pub const USER: u8 = 1;
-    /// An upstream contract was violated: version out of range, schema unrecognized.
-    pub const UPSTREAM: u8 = 2;
-    /// Something broke that is neither the caller's fault nor upstream's.
-    pub const SYSTEM: u8 = 3;
-}
+use common::{resolve_human_pubkey, roster_pubkeys, uuid_like};
+use output::{emit, Format};
 
 #[derive(Parser)]
 #[command(
@@ -42,12 +38,6 @@ struct Cli {
 
     #[command(subcommand)]
     command: Command,
-}
-
-#[derive(Copy, Clone, PartialEq, Eq, ValueEnum)]
-enum Format {
-    Text,
-    Json,
 }
 
 #[derive(Subcommand)]
@@ -95,6 +85,11 @@ enum Command {
         /// Output directory. Defaults to `<root>/packs`.
         #[arg(long)]
         out: Option<PathBuf>,
+
+        /// Treat missing materialized skills as warnings instead of hard errors.
+        /// For local iteration only — CI and `waggle sync` stay strict.
+        #[arg(long)]
+        allow_missing_skills: bool,
     },
 
     /// List what the method installation registers: modules, agents, provenance.
@@ -145,7 +140,7 @@ enum Command {
         #[arg(long)]
         body: String,
 
-        #[arg(long, default_value = "http://localhost:3000")]
+        #[arg(long, default_value = "http://localhost:3100")]
         relay: String,
     },
 
@@ -174,7 +169,7 @@ enum Command {
         #[arg(long)]
         dry_run: bool,
 
-        #[arg(long, default_value = "http://localhost:3000")]
+        #[arg(long, default_value = "http://localhost:3100")]
         relay: String,
     },
 
@@ -190,7 +185,7 @@ enum Command {
         #[arg(long)]
         priority: Option<String>,
 
-        #[arg(long, default_value = "http://localhost:3000")]
+        #[arg(long, default_value = "http://localhost:3100")]
         relay: String,
     },
 
@@ -227,7 +222,7 @@ enum Command {
         #[arg(long = "ref")]
         references: Vec<String>,
 
-        #[arg(long, default_value = "http://localhost:3000")]
+        #[arg(long, default_value = "http://localhost:3100")]
         relay: String,
 
         #[arg(long)]
@@ -256,7 +251,7 @@ enum Command {
         pack: Option<PathBuf>,
 
         /// Relay base URL.
-        #[arg(long, default_value = "http://localhost:3000")]
+        #[arg(long, default_value = "http://localhost:3100")]
         relay: String,
 
         /// Path to the substrate CLI.
@@ -354,7 +349,7 @@ enum IdentityCmd {
         pack: PathBuf,
 
         /// Relay base URL.
-        #[arg(long, default_value = "http://localhost:3000")]
+        #[arg(long, default_value = "http://localhost:3100")]
         relay: String,
 
         /// Path to the substrate CLI. Defaults to the vendored release build.
@@ -452,17 +447,17 @@ enum RuntimeCmd {
         /// Idle seconds before buzz-acp exits (`BUZZ_ACP_IDLE_TIMEOUT`).
         #[arg(long, default_value_t = waggle_hive::supervisor::DEFAULT_IDLE_TIMEOUT_SECS)]
         idle_timeout: u64,
-    },
-}
 
-/// One versioned envelope shared by every command (AD-20 consistency convention).
-#[derive(Serialize)]
-struct Envelope<T: Serialize> {
-    schema: &'static str,
-    command: &'static str,
-    ok: bool,
-    #[serde(flatten)]
-    data: T,
+        /// Channel id to subscribe (`#h`). Repeatable. Also reads `WAGGLE_SUPERVISOR_CHANNELS`
+        /// (comma-separated) when none are passed.
+        #[arg(long = "channel")]
+        channels: Vec<String>,
+
+        /// Role whose `.nsec` authenticates the supervisor WebSocket (NIP-42).
+        /// Defaults to `BUZZ_PRIVATE_KEY` / `WAGGLE_OWNER_NSEC`.
+        #[arg(long)]
+        auth_role: Option<String>,
+    },
 }
 
 #[derive(Serialize)]
@@ -543,16 +538,24 @@ fn main() -> ExitCode {
             all,
             ref agent,
             ref out,
+            allow_missing_skills,
         } => {
             let out_dir = out.clone().unwrap_or_else(|| root.join("packs"));
             if all {
-                run_compile_all(&root, &out_dir, cli.format)
+                run_compile_all(&root, &out_dir, cli.format, allow_missing_skills)
             } else {
                 let Some(module) = module.as_deref() else {
                     eprintln!("error: --module is required unless --all");
                     return ExitCode::from(exit::USER);
                 };
-                run_compile(&root, module, agent.as_deref(), &out_dir, cli.format)
+                run_compile(
+                    &root,
+                    module,
+                    agent.as_deref(),
+                    &out_dir,
+                    cli.format,
+                    allow_missing_skills,
+                )
             }
         }
         Command::Modules => run_modules(&root, cli.format),
@@ -563,7 +566,7 @@ fn main() -> ExitCode {
             ref verdict,
             dry_run,
             ref relay,
-        } => run_gate(
+        } => commands::gate::run_gate(
             &root,
             role,
             channel,
@@ -699,7 +702,7 @@ fn main() -> ExitCode {
                     release
                 }
             });
-            run_sync(
+            commands::sync::run_sync(
                 &root,
                 bmad_version.as_deref(),
                 modules.as_deref(),
@@ -733,29 +736,6 @@ struct ProvisionReport {
     channels: Vec<ProvisionedChannel>,
 }
 
-/// Map a BMAD agent id to a short waggle identity role.
-fn role_for_agent(agent_id: &str) -> String {
-    if agent_id == "bmad-tea" {
-        return "tea".into();
-    }
-    if let Some(rest) = agent_id.strip_prefix("bmad-agent-") {
-        return rest.to_string();
-    }
-    if let Some(rest) = agent_id.strip_prefix("bmad-cis-agent-") {
-        return format!("cis-{rest}");
-    }
-    if let Some(rest) = agent_id.strip_prefix("gds-agent-") {
-        return format!("gds-{rest}");
-    }
-    if let Some(rest) = agent_id.strip_prefix("wds-agent-") {
-        return format!("wds-{rest}");
-    }
-    if let Some(rest) = agent_id.strip_prefix("bmad-") {
-        return rest.to_string();
-    }
-    agent_id.to_string()
-}
-
 /// Modules that register agents or ship `templates/<module>/channels.json`.
 fn modules_to_compile(root: &std::path::Path) -> Vec<String> {
     let mut mods = Vec::new();
@@ -776,7 +756,12 @@ fn modules_to_compile(root: &std::path::Path) -> Vec<String> {
     mods
 }
 
-fn run_compile_all(root: &std::path::Path, out_dir: &std::path::Path, format: Format) -> ExitCode {
+pub(crate) fn run_compile_all(
+    root: &std::path::Path,
+    out_dir: &std::path::Path,
+    format: Format,
+    allow_missing_skills: bool,
+) -> ExitCode {
     let mods = modules_to_compile(root);
     if mods.is_empty() {
         eprintln!("error: no modules to compile — is BMAD installed?");
@@ -788,7 +773,7 @@ fn run_compile_all(root: &std::path::Path, out_dir: &std::path::Path, format: Fo
             Format::Text => println!("--- compile {m} ---"),
             Format::Json => {}
         }
-        let code = run_compile(root, m, None, out_dir, format);
+        let code = run_compile(root, m, None, out_dir, format, allow_missing_skills);
         if code != ExitCode::from(exit::OK) {
             failed = true;
         }
@@ -847,46 +832,6 @@ fn write_hive_channel_store(
     Ok(())
 }
 
-fn resolve_human_pubkey(explicit: Option<&str>) -> Option<String> {
-    explicit
-        .map(str::to_string)
-        .or_else(|| std::env::var("WAGGLE_HUMAN_PUBKEY").ok())
-        .or_else(|| std::env::var("BUZZ_ACP_AGENT_OWNER").ok())
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-}
-
-fn roster_pubkeys(root: &std::path::Path, human: Option<&str>) -> Vec<String> {
-    let mut keys = Vec::new();
-    if let Some(h) = human {
-        keys.push(h.to_ascii_lowercase());
-    }
-    let runtime = root.join("keys").join("runtime");
-    if let Ok(rd) = std::fs::read_dir(&runtime) {
-        for entry in rd.flatten() {
-            let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) != Some("json") {
-                continue;
-            }
-            let Ok(raw) = std::fs::read_to_string(&path) else {
-                continue;
-            };
-            let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) else {
-                continue;
-            };
-            if let Some(pk) = v.get("public_key_hex").and_then(|x| x.as_str()) {
-                let pk = pk.to_ascii_lowercase();
-                if !keys.contains(&pk) {
-                    keys.push(pk);
-                }
-            }
-        }
-    }
-    keys.sort();
-    keys.dedup();
-    keys
-}
-
 fn run_provision_all(
     root: &std::path::Path,
     role: &str,
@@ -896,12 +841,35 @@ fn run_provision_all(
     refresh: bool,
     format: Format,
 ) -> ExitCode {
+    run_provision_all_opts(
+        root,
+        role,
+        relay,
+        buzz_cli,
+        human_pubkey,
+        refresh,
+        format,
+        true,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn run_provision_all_opts(
+    root: &std::path::Path,
+    role: &str,
+    relay: &str,
+    buzz_cli: &std::path::Path,
+    human_pubkey: Option<&str>,
+    refresh: bool,
+    format: Format,
+    emit_report: bool,
+) -> ExitCode {
     let out_dir = root.join("packs");
     if let Err(e) = write_hive_channel_store(root, &out_dir) {
         eprintln!("error: {e}");
         return ExitCode::from(exit::SYSTEM);
     }
-    run_provision(
+    run_provision_opts(
         root,
         "hive",
         role,
@@ -911,208 +879,8 @@ fn run_provision_all(
         human_pubkey,
         refresh,
         format,
+        emit_report,
     )
-}
-
-#[allow(clippy::too_many_arguments)]
-fn run_sync(
-    root: &std::path::Path,
-    bmad_version: Option<&str>,
-    modules: Option<&str>,
-    skip_install: bool,
-    allow_unsupported: bool,
-    relay: &str,
-    offline: bool,
-    buzz_cli: &std::path::Path,
-    human_pubkey: Option<&str>,
-    skip_global_skills: bool,
-    refresh: bool,
-    format: Format,
-) -> ExitCode {
-    let pins_raw = match std::fs::read_to_string(root.join("BUZZ_VERSION")) {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("error: cannot read BUZZ_VERSION: {e}");
-            return ExitCode::from(exit::SYSTEM);
-        }
-    };
-    let pins = waggle_core::pins::parse_pins(&pins_raw);
-    let version = bmad_version
-        .or_else(|| pins.get("BMAD_METHOD_VERSION").map(String::as_str))
-        .unwrap_or("6.10.0");
-    let module_list = modules
-        .or_else(|| pins.get("BMAD_MODULES").map(String::as_str))
-        .unwrap_or("bmm,bmb,tea,cis,gds,wds");
-
-    if let Some(range) = waggle_core::pins::range(&pins, "BMAD_SUPPORTED") {
-        if let Some(v) = waggle_core::Version::parse(version) {
-            if !range.check(v).is_supported() && !allow_unsupported {
-                eprintln!(
-                    "error: BMAD {version} is outside BMAD_SUPPORTED ({range}). \
-                     Pass --allow-unsupported to override."
-                );
-                return ExitCode::from(exit::USER);
-            }
-        }
-    }
-
-    if !skip_install {
-        println!("sync: installing bmad-method@{version} modules={module_list}");
-        // `--action update` adds newly requested modules; `--yes` alone defaults to
-        // quick-update which only refreshes modules already present.
-        let status = std::process::Command::new("npx")
-            .args([
-                "--yes",
-                &format!("bmad-method@{version}"),
-                "install",
-                "--directory",
-                &root.display().to_string(),
-                "--modules",
-                module_list,
-                "--tools",
-                "claude-code",
-                "--all-stable",
-                "--action",
-                "update",
-                "--yes",
-            ])
-            .current_dir(root)
-            .status();
-        match status {
-            Ok(s) if s.success() => {}
-            Ok(s) => {
-                eprintln!("error: bmad-method install exited {s}");
-                return ExitCode::from(exit::UPSTREAM);
-            }
-            Err(e) => {
-                eprintln!("error: could not run npx bmad-method: {e}");
-                return ExitCode::from(exit::SYSTEM);
-            }
-        }
-    }
-
-    let out_dir = root.join("packs");
-    let compile_code = run_compile_all(root, &out_dir, format);
-    if compile_code != ExitCode::from(exit::OK) {
-        return compile_code;
-    }
-
-    if !skip_global_skills {
-        let project_skills = root.join(".claude").join("skills");
-        let target = waggle_hive::skills::global_skills_home();
-        match waggle_hive::skills::publish_global(&project_skills, &target) {
-            Ok(report) => {
-                if matches!(format, Format::Text) {
-                    println!(
-                        "global skills {} linked, {} skipped, {} removed → {}",
-                        report.linked.len(),
-                        report.skipped.len(),
-                        report.removed.len(),
-                        report.target_dir.display()
-                    );
-                    for (name, reason) in report.skipped.iter().take(5) {
-                        println!("  skip {name}: {reason}");
-                    }
-                }
-            }
-            Err(e) => {
-                eprintln!("warning: global skills publish: {e}");
-            }
-        }
-    }
-
-    let registry = match waggle_method::registry::read(root) {
-        Ok(r) => r,
-        Err(e) => {
-            eprintln!("error: {e}");
-            return ExitCode::from(exit::UPSTREAM);
-        }
-    };
-
-    // Identities + runtime configs for every registered agent.
-    for (agent_id, agent) in &registry {
-        let role = role_for_agent(agent_id);
-        match waggle_hive::identity::provision(root, &role, false) {
-            Ok(_) | Err(waggle_hive::IdentityError::AlreadyExists { .. }) => {}
-            Err(e) => {
-                eprintln!("warning: identity {role}: {e}");
-                continue;
-            }
-        }
-        let pack = root.join("packs").join(&agent.module);
-        let _ = waggle_hive::runtime::emit_config(
-            root,
-            &role,
-            &pack,
-            agent_id,
-            relay,
-            waggle_hive::runtime::DEFAULT_MAX_SESSIONS,
-        );
-        if !offline {
-            let admin = root.join("vendor/buzz/target/debug/buzz-admin");
-            let admin = if admin.exists() {
-                admin
-            } else {
-                root.join("vendor/buzz/target/release/buzz-admin")
-            };
-            let _ = waggle_hive::identity::register_member(root, &role, &admin, "member");
-            if let Ok((display_name, description)) = read_pack_persona_named(&pack, agent_id) {
-                let _ = waggle_hive::runtime::publish_managed_agent(
-                    root,
-                    &role,
-                    relay,
-                    &display_name,
-                    &description,
-                    agent_id,
-                    waggle_hive::runtime::DEFAULT_MAX_SESSIONS,
-                    &uuid_like(),
-                );
-                let secret_path = root.join("keys").join(format!("{role}.nsec"));
-                if let Ok(secret) = std::fs::read_to_string(&secret_path) {
-                    let _ = std::process::Command::new(buzz_cli)
-                        .env("BUZZ_PRIVATE_KEY", secret.trim())
-                        .env("BUZZ_RELAY_URL", relay)
-                        .args([
-                            "users",
-                            "set-profile",
-                            "--name",
-                            &display_name,
-                            "--about",
-                            &description,
-                        ])
-                        .status();
-                }
-            }
-        }
-    }
-
-    if !offline {
-        let _ = run_provision_all(root, "tea", relay, buzz_cli, human_pubkey, refresh, format);
-    }
-
-    // Persist sync snapshot for CI diffs.
-    let state = serde_json::json!({
-        "bmad_method_version": version,
-        "modules_requested": module_list,
-        "synced_at_unix": std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0),
-    });
-    let custom = root.join("_bmad").join("custom");
-    let _ = std::fs::create_dir_all(&custom);
-    let _ = std::fs::write(
-        custom.join("waggle-sync-state.json"),
-        serde_json::to_string_pretty(&state).unwrap_or_default() + "\n",
-    );
-
-    match format {
-        Format::Text => {
-            println!("sync complete — restart: waggle runtime supervisor");
-        }
-        Format::Json => emit(format, "sync", true, &state),
-    }
-    ExitCode::from(exit::OK)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1126,6 +894,33 @@ fn run_provision(
     human_pubkey: Option<&str>,
     refresh: bool,
     format: Format,
+) -> ExitCode {
+    run_provision_opts(
+        root,
+        module,
+        role,
+        pack_dir,
+        relay,
+        buzz_cli,
+        human_pubkey,
+        refresh,
+        format,
+        true,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_provision_opts(
+    root: &std::path::Path,
+    module: &str,
+    role: &str,
+    pack_dir: &std::path::Path,
+    relay: &str,
+    buzz_cli: &std::path::Path,
+    human_pubkey: Option<&str>,
+    refresh: bool,
+    format: Format,
+    emit_report: bool,
 ) -> ExitCode {
     let templates_file = pack_dir.join("channel-templates.json");
     if !templates_file.exists() {
@@ -1199,12 +994,7 @@ fn run_provision(
                 let desc = t.get("description").and_then(|v| v.as_str());
                 let canvas = t.get("canvas_template").and_then(|v| v.as_str());
                 match waggle_hive::channels::refresh_channel(
-                    buzz_cli,
-                    relay,
-                    &secret,
-                    &id,
-                    desc,
-                    canvas,
+                    buzz_cli, relay, &secret, &id, desc, canvas,
                 ) {
                     Ok(r) => ("refreshed", id, r.canvas_applied),
                     Err(e) => {
@@ -1217,9 +1007,7 @@ fn run_provision(
                 ("already-exists", id, false)
             }
             Ok(waggle_hive::channels::Provisioned::Refreshed {
-                id,
-                canvas_applied,
-                ..
+                id, canvas_applied, ..
             }) => ("refreshed", id, canvas_applied),
             Err(e) => {
                 eprintln!("error: {e}");
@@ -1228,15 +1016,13 @@ fn run_provision(
         };
 
         if !members.is_empty() {
-            let failed = waggle_hive::channels::ensure_members(
-                buzz_cli,
-                relay,
-                &secret,
-                &id,
-                &members,
-            );
+            let failed =
+                waggle_hive::channels::ensure_members(buzz_cli, relay, &secret, &id, &members);
             for (pk, err) in failed.into_iter().take(3) {
-                eprintln!("warning: add-member {}… on {template_name}: {err}", &pk[..12.min(pk.len())]);
+                eprintln!(
+                    "warning: add-member {}… on {template_name}: {err}",
+                    &pk[..12.min(pk.len())]
+                );
             }
         }
 
@@ -1254,174 +1040,25 @@ fn run_provision(
         channels: out,
     };
 
-    match format {
-        Format::Json => emit(format, "provision", true, &report),
-        Format::Text => {
-            for c in &report.channels {
-                let canvas = if c.canvas_applied { " +canvas" } else { "" };
-                println!("{:<14} {}{}", c.outcome, c.channel, canvas);
-            }
-            if !members.is_empty() {
-                println!(
-                    "roster        {} pubkey(s) ensured on each channel",
-                    members.len()
-                );
+    if emit_report {
+        match format {
+            Format::Json => emit(format, "provision", true, &report),
+            Format::Text => {
+                for c in &report.channels {
+                    let canvas = if c.canvas_applied { " +canvas" } else { "" };
+                    println!("{:<14} {}{}", c.outcome, c.channel, canvas);
+                }
+                if !members.is_empty() {
+                    println!(
+                        "roster        {} pubkey(s) ensured on each channel",
+                        members.len()
+                    );
+                }
             }
         }
     }
     ExitCode::from(exit::OK)
 }
-
-#[derive(Serialize)]
-struct GateReport {
-    verdict_event: String,
-    outcome: waggle_core::gate::GateOutcome,
-    /// Present only when a record was published.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    record_event: Option<String>,
-    /// The identity that signed the record — waggle's, never the relay's.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    record_signed_by: Option<String>,
-    roster_size: usize,
-    reactions_seen: usize,
-    /// Who the relay says may approve. Surfaced because a gate that will not approve is
-    /// almost always a roster question, and an operator should not have to guess.
-    roster: Vec<RosterView>,
-}
-
-#[derive(Serialize)]
-struct RosterView {
-    pubkey: String,
-    role: String,
-}
-
-#[allow(clippy::too_many_arguments)]
-fn run_gate(
-    root: &std::path::Path,
-    role: &str,
-    channel: &str,
-    verdict_event: &str,
-    verdict: &str,
-    dry_run: bool,
-    relay: &str,
-    format: Format,
-) -> ExitCode {
-    let verdict: waggle_core::Verdict = match verdict.parse() {
-        Ok(v) => v,
-        Err(e) => {
-            eprintln!("error: {e}");
-            return ExitCode::from(exit::USER);
-        }
-    };
-
-    let reactions = match waggle_hive::events::fetch_reactions(
-        root,
-        role,
-        relay,
-        verdict_event,
-        &uuid_like(),
-    ) {
-        Ok(r) => r,
-        Err(e) => {
-            eprintln!("error: {e}");
-            return ExitCode::from(exit::UPSTREAM);
-        }
-    };
-
-    let roster = match waggle_hive::events::fetch_roster(root, role, relay, channel, &uuid_like()) {
-        Ok(r) => r,
-        Err(e) => {
-            eprintln!("error: {e}");
-            return ExitCode::from(exit::UPSTREAM);
-        }
-    };
-
-    let outcome = waggle_core::gate::reconcile(verdict, &reactions, &roster);
-
-    let mut record_event = None;
-    let mut record_signed_by = None;
-
-    if !dry_run {
-        if let Some(body) = waggle_core::gate::render_gate_record(&outcome, verdict_event) {
-            let record = waggle_core::ArtifactEvent {
-                kind_marker: waggle_core::ArtifactKind::GateRecord,
-                channel_id: channel.to_string(),
-                artifact_type: Some("gate-record".into()),
-                module: None,
-                story: None,
-                priority: None,
-                references: vec![verdict_event.to_string()],
-                from_role: Some(role.to_string()),
-                to_role: None,
-                body,
-            };
-            match waggle_hive::events::publish_artifact(root, role, relay, &record, &uuid_like()) {
-                Ok(p) => {
-                    record_event = Some(p.event_id);
-                    record_signed_by = Some(p.pubkey);
-                }
-                Err(e) => {
-                    eprintln!("error: {e}");
-                    return ExitCode::from(exit::UPSTREAM);
-                }
-            }
-        }
-    }
-
-    let report = GateReport {
-        verdict_event: verdict_event.to_string(),
-        outcome,
-        record_event,
-        record_signed_by,
-        roster_size: roster.len(),
-        reactions_seen: reactions.len(),
-        roster: roster
-            .iter()
-            .map(|r| RosterView {
-                pubkey: r.pubkey.clone(),
-                role: format!("{:?}", r.role).to_lowercase(),
-            })
-            .collect(),
-    };
-
-    match format {
-        Format::Json => emit(format, "gate", true, &report),
-        Format::Text => match &report.outcome {
-            waggle_core::gate::GateOutcome::Approved {
-                verdict, approver, ..
-            } => {
-                println!("{verdict} approved by {approver}");
-                match &report.record_event {
-                    Some(id) => println!(
-                        "record {id}
-  signed by {} (waggle identity, not the relay)",
-                        report.record_signed_by.clone().unwrap_or_default()
-                    ),
-                    None => println!("(dry run — no record published)"),
-                }
-            }
-            waggle_core::gate::GateOutcome::Unauthorized {
-                verdict,
-                attempted_by,
-                required,
-            } => {
-                println!(
-                    "{verdict} NOT approved — {} reaction(s) from identities below {required:?}",
-                    attempted_by.len()
-                );
-                for a in attempted_by {
-                    println!("  unauthorized: {a}");
-                }
-            }
-            waggle_core::gate::GateOutcome::Pending { verdict } => {
-                println!("{verdict} pending — no approving reaction yet");
-            }
-        },
-    }
-
-    ExitCode::from(exit::OK)
-}
-
 #[derive(Serialize)]
 struct PatchReport {
     patch_event: String,
@@ -1614,7 +1251,11 @@ fn run_publish(
                     sha256,
                     url,
                     bytes: _,
-                } => ("reference".to_string(), Some(sha256.clone()), Some(url.clone())),
+                } => (
+                    "reference".to_string(),
+                    Some(sha256.clone()),
+                    Some(url.clone()),
+                ),
             };
             let report = PublishReport {
                 event_id: p.event_id,
@@ -1725,16 +1366,6 @@ fn run_trail(
             ExitCode::from(exit::UPSTREAM)
         }
     }
-}
-
-/// A nonce for NIP-98. Not a UUID library dependency for one string.
-fn uuid_like() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let n = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or_default();
-    format!("waggle-{n}")
 }
 
 #[derive(Serialize)]
@@ -1872,6 +1503,7 @@ fn run_compile(
     agent: Option<&str>,
     out_dir: &std::path::Path,
     format: Format,
+    allow_missing_skills: bool,
 ) -> ExitCode {
     // AD-19: resolve the tool directory from the installation manifest, never hard-coded.
     let installation = match waggle_method::detect(root) {
@@ -1982,10 +1614,7 @@ fn run_compile(
     let help_csv_path = root.join("_bmad/_config/bmad-help.csv");
     // Core surfaces only — keep agent packs menu-faithful (verify-compile counts skills).
     let always_skills: Vec<String> = if module == "core" {
-        vec![
-            "bmad-help".to_string(),
-            "bmad-party-mode".to_string(),
-        ]
+        vec!["bmad-help".to_string(), "bmad-party-mode".to_string()]
     } else {
         Vec::new()
     };
@@ -2001,7 +1630,7 @@ fn run_compile(
         always_skills: &always_skills,
     };
 
-    let outcome = match waggle_emit::emit_pack(out_dir, &packs, &meta) {
+    let outcome = match waggle_emit::emit_pack(out_dir, &packs, &meta, allow_missing_skills) {
         Ok(o) => o,
         Err(e) => {
             eprintln!("error: {e}");
@@ -2304,33 +1933,29 @@ fn run_runtime(root: &std::path::Path, cmd: &RuntimeCmd, format: Format) -> Exit
             persona,
             relay,
             max_sessions,
-        } => match waggle_hive::runtime::emit_config(
-            root,
-            role,
-            pack,
-            persona,
-            relay,
-            *max_sessions,
-        ) {
-            Ok((cfg, path)) => {
-                match format {
-                    Format::Json => emit(format, "runtime.emit", true, &cfg),
-                    Format::Text => {
-                        println!("wrote {}", path.display());
-                        println!("role          {}", cfg.role);
-                        println!("npub          {}", cfg.npub);
-                        println!("pack          {}", cfg.pack_dir);
-                        println!("max_sessions  {}", cfg.max_sessions);
-                        println!("live turn needs: {}", cfg.required_env.join(", "));
+        } => {
+            match waggle_hive::runtime::emit_config(root, role, pack, persona, relay, *max_sessions)
+            {
+                Ok((cfg, path)) => {
+                    match format {
+                        Format::Json => emit(format, "runtime.emit", true, &cfg),
+                        Format::Text => {
+                            println!("wrote {}", path.display());
+                            println!("role          {}", cfg.role);
+                            println!("npub          {}", cfg.npub);
+                            println!("pack          {}", cfg.pack_dir);
+                            println!("max_sessions  {}", cfg.max_sessions);
+                            println!("live turn needs: {}", cfg.required_env.join(", "));
+                        }
                     }
+                    ExitCode::from(exit::OK)
                 }
-                ExitCode::from(exit::OK)
+                Err(e) => {
+                    eprintln!("error: {e}");
+                    ExitCode::from(exit::USER)
+                }
             }
-            Err(e) => {
-                eprintln!("error: {e}");
-                ExitCode::from(exit::USER)
-            }
-        },
+        }
         RuntimeCmd::PublishAgent {
             role,
             pack,
@@ -2338,40 +1963,36 @@ fn run_runtime(root: &std::path::Path, cmd: &RuntimeCmd, format: Format) -> Exit
             relay,
             max_sessions,
         } => {
-            let (display_name, description) = match read_pack_persona_named(pack, persona) {
-                Ok(p) => p,
-                Err(e) => {
-                    eprintln!("error: {e}");
-                    return ExitCode::from(exit::USER);
-                }
-            };
-            match waggle_hive::runtime::publish_managed_agent(
+            match waggle_hive::runtime::publish_persona_and_agent(
                 root,
                 role,
-                relay,
-                &display_name,
-                &description,
+                pack,
                 persona,
+                relay,
                 *max_sessions,
+                "anyone",
                 &uuid_like(),
             ) {
-                Ok(p) => {
+                Ok((def, p)) => {
                     match format {
                         Format::Json => emit(
                             format,
                             "runtime.publish-agent",
                             true,
                             &serde_json::json!({
+                                "persona_event_id": def.event_id,
                                 "event_id": p.event_id,
                                 "pubkey": p.pubkey,
                                 "kind": 30177,
+                                "persona_kind": 30175,
                                 "persona_id": persona,
                             }),
                         ),
                         Format::Text => {
+                            println!("published persona definition {}", def.event_id);
                             println!("published managed-agent {}", p.event_id);
                             println!("  persona   {persona}");
-                            println!("  signed by {}", p.pubkey);
+                            println!("  signed by {} (owner)", p.pubkey);
                         }
                     }
                     ExitCode::from(exit::OK)
@@ -2390,6 +2011,8 @@ fn run_runtime(root: &std::path::Path, cmd: &RuntimeCmd, format: Format) -> Exit
             max_concurrent,
             respond_to,
             idle_timeout,
+            channels,
+            auth_role,
         } => {
             let buzz_acp = buzz_acp.clone().unwrap_or_else(|| {
                 let debug = root.join("vendor/buzz/target/debug/buzz-acp");
@@ -2400,6 +2023,17 @@ fn run_runtime(root: &std::path::Path, cmd: &RuntimeCmd, format: Format) -> Exit
                     release
                 }
             });
+            let mut channel_ids = channels.clone();
+            if channel_ids.is_empty() {
+                if let Ok(env_channels) = std::env::var("WAGGLE_SUPERVISOR_CHANNELS") {
+                    channel_ids = env_channels
+                        .split(',')
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                        .map(str::to_string)
+                        .collect();
+                }
+            }
             let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
             {
                 let stop = stop.clone();
@@ -2414,6 +2048,8 @@ fn run_runtime(root: &std::path::Path, cmd: &RuntimeCmd, format: Format) -> Exit
                 max_concurrent: *max_concurrent,
                 respond_to: respond_to.clone(),
                 idle_timeout_secs: *idle_timeout,
+                channel_ids,
+                auth_role: auth_role.clone(),
             };
             match waggle_hive::supervisor::run(opts, stop) {
                 Ok(()) => ExitCode::from(exit::OK),
@@ -2435,8 +2071,6 @@ fn ctrlc_set(stop: std::sync::Arc<std::sync::atomic::AtomicBool>) -> Result<(), 
 }
 
 /// Pull `display_name` and `description` out of a compiled pack's persona frontmatter.
-///
-/// Deliberately minimal: enough to publish a profile, not a general YAML parser.
 fn read_pack_persona(pack: &std::path::Path) -> Result<(String, String), String> {
     let agents = pack.join("agents");
     let entry = std::fs::read_dir(&agents)
@@ -2444,49 +2078,9 @@ fn read_pack_persona(pack: &std::path::Path) -> Result<(String, String), String>
         .filter_map(Result::ok)
         .find(|e| e.file_name().to_string_lossy().ends_with(".persona.md"))
         .ok_or_else(|| format!("no .persona.md found in {}", agents.display()))?;
-    parse_persona_frontmatter(&entry.path())
-}
-
-/// Same as [`read_pack_persona`], but requires an explicit persona id (Story 1.7).
-fn read_pack_persona_named(
-    pack: &std::path::Path,
-    persona_id: &str,
-) -> Result<(String, String), String> {
-    let path = pack
-        .join("agents")
-        .join(format!("{persona_id}.persona.md"));
-    if !path.is_file() {
-        return Err(format!("persona file not found: {}", path.display()));
-    }
-    parse_persona_frontmatter(&path)
-}
-
-fn parse_persona_frontmatter(path: &std::path::Path) -> Result<(String, String), String> {
-    let text = std::fs::read_to_string(path)
-        .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
-
-    // Frontmatter only: stop at the closing delimiter so body text cannot masquerade
-    // as a field.
-    let frontmatter: Vec<&str> = text
-        .lines()
-        .skip(1)
-        .take_while(|l| l.trim() != "---")
-        .collect();
-
-    let mut display_name = None;
-    let mut description = None;
-    for line in frontmatter {
-        if let Some(v) = line.strip_prefix("display_name:") {
-            display_name = Some(v.trim().trim_matches('"').to_string());
-        } else if let Some(v) = line.strip_prefix("description:") {
-            description = Some(v.trim().trim_matches('"').to_string());
-        }
-    }
-
-    Ok((
-        display_name.ok_or_else(|| format!("{}: missing display_name", path.display()))?,
-        description.ok_or_else(|| format!("{}: missing description", path.display()))?,
-    ))
+    let p =
+        waggle_hive::runtime::read_pack_persona_file(&entry.path()).map_err(|e| e.to_string())?;
+    Ok((p.display_name, p.description))
 }
 
 fn run_preflight(
@@ -2612,72 +2206,5 @@ fn component_error(name: &'static str, range: &VersionRange, error: String) -> C
         compatibility: None,
         ok: false,
         error: Some(error),
-    }
-}
-
-fn emit<T: Serialize>(format: Format, command: &'static str, ok: bool, data: &T) {
-    match format {
-        Format::Json => {
-            let env = Envelope {
-                schema: "waggle.v1",
-                command,
-                ok,
-                data,
-            };
-            match serde_json::to_string_pretty(&env) {
-                Ok(s) => println!("{s}"),
-                Err(e) => eprintln!("error: could not serialize output: {e}"),
-            }
-        }
-        Format::Text => print_text(data),
-    }
-}
-
-/// Text rendering goes through JSON so the two formats can never disagree about content.
-fn print_text<T: Serialize>(data: &T) {
-    let Ok(v) = serde_json::to_value(data) else {
-        eprintln!("error: could not render output");
-        return;
-    };
-
-    for key in ["substrate", "method"] {
-        let Some(c) = v.get(key) else { continue };
-        let ok = c.get("ok").and_then(|b| b.as_bool()).unwrap_or(false);
-        let mark = if ok { "ok  " } else { "FAIL" };
-        let name = c.get("name").and_then(|s| s.as_str()).unwrap_or(key);
-        let expected = c.get("expected").and_then(|s| s.as_str()).unwrap_or("?");
-
-        match c.get("error").and_then(|s| s.as_str()) {
-            Some(err) => println!("{mark} {name:<12} expected {expected}\n     {err}"),
-            None => {
-                let found = c.get("found").and_then(|s| s.as_str()).unwrap_or("?");
-                let why = c
-                    .get("compatibility")
-                    .and_then(|s| s.as_str())
-                    .unwrap_or("unknown");
-                if ok {
-                    println!("{mark} {name:<12} {found}  (expected {expected})");
-                } else {
-                    println!(
-                        "{mark} {name:<12} {found}  (expected {expected}) — {}",
-                        why.replace('_', " ")
-                    );
-                }
-            }
-        }
-    }
-
-    if let Some(i) = v.get("substrate_integrity") {
-        let clean = i.get("clean").and_then(|b| b.as_bool()).unwrap_or(false);
-        if clean {
-            println!("ok   integrity    substrate checkout is unmodified (AD-2)");
-        } else {
-            println!("FAIL integrity    substrate checkout has modified tracked files (AD-2):");
-            if let Some(list) = i.get("modified").and_then(|m| m.as_array()) {
-                for line in list.iter().filter_map(|l| l.as_str()) {
-                    println!("       {line}");
-                }
-            }
-        }
     }
 }

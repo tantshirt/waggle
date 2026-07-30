@@ -21,8 +21,9 @@ require_env() {
     cat >&2 <<'MSG'
 Missing deploy/compose/.env.
 
-Copy .env.example to .env and replace every CHANGE_ME value, or run the bootstrap
-script once it lands. Do not start production with generated secrets missing.
+Copy .env.example (closed/prod) or .env.dev.example (open/local) to .env and
+replace every CHANGE_ME value. Production defaults require auth + membership;
+use BUZZ_COMPOSE_DEV=true for the open local overlay.
 MSG
     exit 1
   fi
@@ -122,7 +123,7 @@ Commands:
 
 Environment switches:
   BUZZ_COMPOSE_TLS=true   Include compose.caddy.yml for automatic HTTPS
-  BUZZ_COMPOSE_DEV=true   Include compose.dev.yml for local admin ports/tools
+  BUZZ_COMPOSE_DEV=true   Include compose.dev.yml (open auth + local admin ports)
 MSG
     ;;
   *)

@@ -12,7 +12,10 @@
 //! **AD-14 still holds.** Secret key material is confined to this module: it is loaded,
 //! used to sign, and never returned, logged, or formatted.
 
+use std::io::Read;
 use std::path::Path;
+use std::sync::OnceLock;
+use std::time::Duration;
 
 use base64::Engine as _;
 use nostr::util::JsonUtil;
@@ -30,6 +33,12 @@ const KIND_BLOSSOM_AUTH: u16 = 24_242;
 /// Upstream's generic-file upload cap (`max_file_bytes` in buzz-media). Not in NIP-11.
 /// Bodies larger than this cannot go inline *or* by reference.
 pub const MAX_BLOB_BYTES: usize = 104_857_600;
+
+/// Request timeout for relay / Blossom HTTP calls.
+pub const HTTP_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+const HTTP_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+/// Cap for JSON / text relay responses (events, query, NIP-11, upload ack).
+pub const MAX_HTTP_JSON_BYTES: usize = 16 * 1024 * 1024;
 
 /// Marker `t` tag on events whose body is a content-addressed blob reference (FR-16).
 pub const TAG_REF: &str = "ref";
@@ -68,8 +77,40 @@ pub enum EventError {
     #[error("artifact body is {bytes} bytes, over the media store's {limit}-byte upload limit — cannot be published inline or by reference; split the artifact or shorten it")]
     TooLarge { bytes: usize, limit: usize },
 
+    #[error("HTTP response from {url} exceeded the {limit}-byte size cap ({bytes} bytes)")]
+    ResponseTooLarge {
+        url: String,
+        bytes: usize,
+        limit: usize,
+    },
+
+    #[error("failed reading HTTP body from {url}: {reason}")]
+    BodyRead { url: String, reason: String },
+
     #[error("uploaded blob hash mismatch: expected {expected}, got {got}")]
     HashMismatch { expected: String, got: String },
+
+    #[error("event failed cryptographic verification: {0}")]
+    Unverified(String),
+
+    #[error("relay NIP-11 document is missing a usable `self` pubkey")]
+    RelaySelfMissing,
+
+    #[error("roster event signer {got} does not match relay NIP-11 self {expected}")]
+    RosterSignerMismatch { expected: String, got: String },
+
+    #[error("no verified relay-signed roster (kind:39001) for channel {0}")]
+    RosterMissing(String),
+
+    #[error("verdict event {event_id} claims {got}, but --verdict was {expected}")]
+    VerdictMismatch {
+        event_id: String,
+        expected: String,
+        got: String,
+    },
+
+    #[error("verdict event {0} is missing or not a waggle gate verdict")]
+    VerdictNotFound(String),
 }
 
 /// Load a role's keys. Private: the secret never leaves this module (AD-14).
@@ -134,6 +175,61 @@ fn hex_encode(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
+/// Shared blocking HTTP client with request timeouts and a small connection pool.
+pub(crate) fn http_client() -> &'static reqwest::blocking::Client {
+    static CLIENT: OnceLock<reqwest::blocking::Client> = OnceLock::new();
+    CLIENT.get_or_init(|| {
+        reqwest::blocking::Client::builder()
+            .timeout(HTTP_REQUEST_TIMEOUT)
+            .connect_timeout(HTTP_CONNECT_TIMEOUT)
+            .pool_max_idle_per_host(4)
+            .build()
+            .expect("reqwest blocking client")
+    })
+}
+
+/// Read an HTTP body with a hard size ceiling (blob downloads and JSON alike).
+pub(crate) fn response_bytes_capped(
+    resp: reqwest::blocking::Response,
+    url: &str,
+    limit: usize,
+) -> Result<Vec<u8>, EventError> {
+    if let Some(len) = resp.content_length() {
+        if len as usize > limit {
+            return Err(EventError::ResponseTooLarge {
+                url: url.to_string(),
+                bytes: len as usize,
+                limit,
+            });
+        }
+    }
+    let mut reader = resp.take(limit as u64 + 1);
+    let mut buf = Vec::new();
+    reader
+        .read_to_end(&mut buf)
+        .map_err(|e| EventError::BodyRead {
+            url: url.to_string(),
+            reason: e.to_string(),
+        })?;
+    if buf.len() > limit {
+        return Err(EventError::ResponseTooLarge {
+            url: url.to_string(),
+            bytes: buf.len(),
+            limit,
+        });
+    }
+    Ok(buf)
+}
+
+pub(crate) fn response_text_capped(
+    resp: reqwest::blocking::Response,
+    url: &str,
+    limit: usize,
+) -> Result<String, EventError> {
+    let bytes = response_bytes_capped(resp, url, limit)?;
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
+}
+
 /// Size limits, discovered from the relay rather than hard-coded (AD-15).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Limits {
@@ -160,19 +256,44 @@ impl Default for Limits {
     }
 }
 
+/// Relay identity + limits from NIP-11.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RelayIdentity {
+    pub limits: Limits,
+    /// Relay signing pubkey (`self` in NIP-11). Required to trust kind:39001.
+    pub self_pubkey: Option<String>,
+}
+
 /// Read the relay's advertised limits (NIP-11). Falls back to observed defaults.
 pub fn discover_limits(relay_url: &str) -> Limits {
-    let client = reqwest::blocking::Client::new();
-    let resp = client
-        .get(relay_url.trim_end_matches('/'))
+    discover_relay_identity(relay_url).limits
+}
+
+/// Read NIP-11 including the relay signing pubkey (`self`).
+pub fn discover_relay_identity(relay_url: &str) -> RelayIdentity {
+    let url = relay_url.trim_end_matches('/').to_string();
+    let resp = http_client()
+        .get(&url)
         .header("Accept", "application/nostr+json")
         .send();
 
     let Ok(resp) = resp else {
-        return Limits::default();
+        return RelayIdentity {
+            limits: Limits::default(),
+            self_pubkey: None,
+        };
     };
-    let Ok(doc) = resp.json::<serde_json::Value>() else {
-        return Limits::default();
+    let Ok(text) = response_text_capped(resp, &url, MAX_HTTP_JSON_BYTES) else {
+        return RelayIdentity {
+            limits: Limits::default(),
+            self_pubkey: None,
+        };
+    };
+    let Ok(doc) = serde_json::from_str::<serde_json::Value>(&text) else {
+        return RelayIdentity {
+            limits: Limits::default(),
+            self_pubkey: None,
+        };
     };
 
     let max_message = doc
@@ -182,10 +303,29 @@ pub fn discover_limits(relay_url: &str) -> Limits {
         .map(|v| v as usize)
         .unwrap_or(Limits::default().max_message);
 
-    Limits {
-        max_message,
-        max_content: max_message / 2,
+    let self_pubkey = doc
+        .get("self")
+        .and_then(|v| v.as_str())
+        .filter(|s| s.len() == 64 && s.chars().all(|c| c.is_ascii_hexdigit()))
+        .map(|s| s.to_ascii_lowercase());
+
+    RelayIdentity {
+        limits: Limits {
+            max_message,
+            max_content: max_message / 2,
+        },
+        self_pubkey,
     }
+}
+
+/// Parse a Nostr event from JSON and verify id + Schnorr signature.
+pub fn parse_and_verify_event(raw: &serde_json::Value) -> Result<nostr::Event, EventError> {
+    let event: nostr::Event = serde_json::from_value(raw.clone())
+        .map_err(|e| EventError::Unparseable(format!("not a nostr event: {e}")))?;
+    event
+        .verify()
+        .map_err(|e| EventError::Unverified(e.to_string()))?;
+    Ok(event)
 }
 
 /// How the artifact body reached the hive (FR-16 / AD-15).
@@ -293,8 +433,7 @@ pub fn publish_artifact_with_limits(
     let url = format!("{}/events", relay_url.trim_end_matches('/'));
     let auth = nip98_header(&keys, "POST", &url, &body, nonce)?;
 
-    let client = reqwest::blocking::Client::new();
-    let resp = client
+    let resp = http_client()
         .post(&url)
         .header("Authorization", auth)
         .header("Content-Type", "application/json")
@@ -306,7 +445,7 @@ pub fn publish_artifact_with_limits(
         })?;
 
     let status = resp.status();
-    let text = resp.text().unwrap_or_default();
+    let text = response_text_capped(resp, &url, MAX_HTTP_JSON_BYTES).unwrap_or_default();
     if !status.is_success() {
         return Err(EventError::Rejected {
             url,
@@ -375,8 +514,7 @@ pub fn upload_blob(keys: &Keys, relay_url: &str, bytes: &[u8]) -> Result<BlobRef
     let url = format!("{}/upload", relay_url.trim_end_matches('/'));
     let auth = blossom_upload_auth(keys, &sha256)?;
 
-    let client = reqwest::blocking::Client::new();
-    let resp = client
+    let resp = http_client()
         .put(&url)
         .header("Authorization", auth)
         .header("X-SHA-256", &sha256)
@@ -389,7 +527,7 @@ pub fn upload_blob(keys: &Keys, relay_url: &str, bytes: &[u8]) -> Result<BlobRef
         })?;
 
     let status = resp.status();
-    let text = resp.text().unwrap_or_default();
+    let text = response_text_capped(resp, &url, MAX_HTTP_JSON_BYTES)?;
     if !status.is_success() {
         return Err(EventError::Rejected {
             url,
@@ -430,8 +568,7 @@ pub fn upload_blob(keys: &Keys, relay_url: &str, bytes: &[u8]) -> Result<BlobRef
 
 /// Fetch a blob and verify its SHA-256 matches (FR-16 retrieve path).
 pub fn fetch_and_verify(blob_url: &str, expected_sha256: &str) -> Result<Vec<u8>, EventError> {
-    let client = reqwest::blocking::Client::new();
-    let resp = client
+    let resp = http_client()
         .get(blob_url)
         .send()
         .map_err(|source| EventError::Unreachable {
@@ -441,7 +578,7 @@ pub fn fetch_and_verify(blob_url: &str, expected_sha256: &str) -> Result<Vec<u8>
 
     let status = resp.status();
     if !status.is_success() {
-        let body = resp.text().unwrap_or_default();
+        let body = response_text_capped(resp, blob_url, MAX_HTTP_JSON_BYTES).unwrap_or_default();
         return Err(EventError::Rejected {
             url: blob_url.to_string(),
             status: status.as_u16(),
@@ -449,13 +586,8 @@ pub fn fetch_and_verify(blob_url: &str, expected_sha256: &str) -> Result<Vec<u8>
         });
     }
 
-    let bytes = resp
-        .bytes()
-        .map_err(|source| EventError::Unreachable {
-            url: blob_url.to_string(),
-            source,
-        })?
-        .to_vec();
+    // Blob downloads are capped at the media-store upload limit — never buffer unbounded.
+    let bytes = response_bytes_capped(resp, blob_url, MAX_BLOB_BYTES)?;
     let got = hex_encode(&Sha256::digest(&bytes));
     if got != expected_sha256 {
         return Err(EventError::HashMismatch {
@@ -496,8 +628,7 @@ pub fn query_by_tag(
     let url = format!("{}/query", relay_url.trim_end_matches('/'));
     let auth = nip98_header(&keys, "POST", &url, &body, nonce)?;
 
-    let client = reqwest::blocking::Client::new();
-    let resp = client
+    let resp = http_client()
         .post(&url)
         .header("Authorization", auth)
         .header("Content-Type", "application/json")
@@ -509,7 +640,7 @@ pub fn query_by_tag(
         })?;
 
     let status = resp.status();
-    let text = resp.text().unwrap_or_default();
+    let text = response_text_capped(resp, &url, MAX_HTTP_JSON_BYTES)?;
     if !status.is_success() {
         return Err(EventError::Rejected {
             url,
@@ -738,12 +869,23 @@ mod size_tests {
             bytes: 300_000,
         };
         let body = reference_body(&blob);
-        assert!(body.len() < 500, "reference body must fit easily: {}", body.len());
+        assert!(
+            body.len() < 500,
+            "reference body must fit easily: {}",
+            body.len()
+        );
         let v: serde_json::Value = serde_json::from_str(&body).unwrap();
         assert_eq!(v["waggle"], "blob-ref");
         assert_eq!(v["sha256"], blob.sha256);
         assert_eq!(v["url"], blob.url);
         assert_eq!(v["bytes"], 300_000);
+    }
+
+    #[test]
+    fn http_client_is_reusable_singleton() {
+        let a = http_client() as *const _;
+        let b = http_client() as *const _;
+        assert_eq!(a, b, "http_client must reuse one Client");
     }
 
     #[test]
@@ -756,7 +898,10 @@ mod size_tests {
         let header = blossom_upload_auth(&keys, &"ab".repeat(32)).unwrap();
         let b64 = header.strip_prefix("Nostr ").expect("scheme");
         // URL_SAFE_NO_PAD — no '+' '/' or '=' padding.
-        assert!(!b64.contains('+') && !b64.contains('/') && !b64.contains('='), "{b64}");
+        assert!(
+            !b64.contains('+') && !b64.contains('/') && !b64.contains('='),
+            "{b64}"
+        );
         let json = base64::engine::general_purpose::URL_SAFE_NO_PAD
             .decode(b64)
             .unwrap();
@@ -789,7 +934,7 @@ fn query(
     let url = format!("{}/query", relay_url.trim_end_matches('/'));
     let auth = nip98_header(keys, "POST", &url, &body, nonce)?;
 
-    let resp = reqwest::blocking::Client::new()
+    let resp = http_client()
         .post(&url)
         .header("Authorization", auth)
         .header("Content-Type", "application/json")
@@ -801,7 +946,7 @@ fn query(
         })?;
 
     let status = resp.status();
-    let text = resp.text().unwrap_or_default();
+    let text = response_text_capped(resp, &url, MAX_HTTP_JSON_BYTES)?;
     if !status.is_success() {
         return Err(EventError::Rejected {
             url,
@@ -817,9 +962,10 @@ fn query(
 
 /// Fetch the reactions (kind:7) targeting `verdict_event`.
 ///
-/// **The author is read from each event's `pubkey` field and nothing else.** That is the
-/// entire point of UP-18: `actor` tags are attacker-controlled on client-submitted events
-/// (the relay guards them only when it signed the event itself), so they are ignored here
+/// Each event is cryptographically verified. **The author is read from each
+/// event's `pubkey` field and nothing else.** That is the entire point of UP-18:
+/// `actor` tags are attacker-controlled on client-submitted events (the relay
+/// guards them only when it signed the event itself), so they are ignored here
 /// even if present.
 pub fn fetch_reactions(
     project_root: &Path,
@@ -836,30 +982,38 @@ pub fn fetch_reactions(
         nonce,
     )?;
 
-    Ok(events
-        .iter()
-        .filter_map(|e| {
-            Some(waggle_core::gate::SignedReaction {
-                event_id: e.get("id")?.as_str()?.to_string(),
-                // Signature-bound. Never `actor`.
-                author_pubkey: e.get("pubkey")?.as_str()?.to_string(),
-                emoji: e
-                    .get("content")
-                    .and_then(|c| c.as_str())
-                    .unwrap_or("")
-                    .to_string(),
-                target_event: verdict_event.to_string(),
-                created_at: e.get("created_at").and_then(serde_json::Value::as_u64)?,
-            })
-        })
-        .collect())
+    let mut out = Vec::new();
+    for raw in &events {
+        let Ok(ev) = parse_and_verify_event(raw) else {
+            continue;
+        };
+        if ev.kind.as_u16() != 7 {
+            continue;
+        }
+        let targets_verdict = ev.tags.iter().any(|t| {
+            let parts = t.clone().to_vec();
+            parts.first().map(String::as_str) == Some("e")
+                && parts.get(1).map(String::as_str) == Some(verdict_event)
+        });
+        if !targets_verdict {
+            continue;
+        }
+        out.push(waggle_core::gate::SignedReaction {
+            event_id: ev.id.to_hex(),
+            // Signature-bound. Never `actor`.
+            author_pubkey: ev.pubkey.to_hex(),
+            emoji: ev.content.to_string(),
+            target_event: verdict_event.to_string(),
+            created_at: ev.created_at.as_secs(),
+        });
+    }
+    Ok(out)
 }
 
 /// Fetch the relay-signed admin roster (kind:39001) for a channel.
 ///
-/// Tags are `["p", pubkey, relay_url, role]`. The event is signed by the relay, which is
-/// exactly what makes it usable as an authorization source (AD-13): waggle maintains no
-/// approver list of its own.
+/// Tags are `["p", pubkey, relay_url, role]`. Only events that verify and whose
+/// signer equals the relay's NIP-11 `self` pubkey are accepted (AD-13).
 pub fn fetch_roster(
     project_root: &Path,
     role: &str,
@@ -867,6 +1021,10 @@ pub fn fetch_roster(
     channel_id: &str,
     nonce: &str,
 ) -> Result<Vec<waggle_core::gate::RosterEntry>, EventError> {
+    let relay_self = discover_relay_identity(relay_url)
+        .self_pubkey
+        .ok_or(EventError::RelaySelfMissing)?;
+
     let keys = load_keys(project_root, role)?;
     let events = query(
         &keys,
@@ -875,80 +1033,184 @@ pub fn fetch_roster(
         nonce,
     )?;
 
-    let mut out = Vec::new();
-    for e in &events {
-        let Some(tags) = e.get("tags").and_then(|t| t.as_array()) else {
+    // Prefer the latest verified relay-signed roster; do not union all events.
+    let mut best: Option<(u64, String, nostr::Event)> = None;
+    for raw in &events {
+        let Ok(ev) = parse_and_verify_event(raw) else {
             continue;
         };
-        for t in tags {
-            let Some(parts) = t.as_array() else { continue };
-            if parts.first().and_then(|v| v.as_str()) != Some("p") {
-                continue;
-            }
-            let Some(pubkey) = parts.get(1).and_then(|v| v.as_str()) else {
-                continue;
-            };
-            // NIP-29 writes `["p", pubkey, relay_url, role]`, but the relay omits an
-            // empty relay_url, so real events look like `["p", pubkey, "owner"]`.
-            // Verified against stored events, not inferred from the builder source —
-            // reading `Tag::parse(["p", hex, "", role])` suggests index 3, and the
-            // emitted tag is at index 2. Scan for a role value instead of trusting a
-            // position, so either shape works.
-            let role = parts
-                .iter()
-                .skip(2)
-                .filter_map(|v| v.as_str())
-                .find_map(|v| match v {
-                    "owner" => Some(waggle_core::gate::Role::Owner),
-                    "admin" => Some(waggle_core::gate::Role::Admin),
-                    _ => None,
-                })
-                .unwrap_or(waggle_core::gate::Role::Member);
-            out.push(waggle_core::gate::RosterEntry {
-                pubkey: pubkey.to_string(),
-                role,
+        if ev.kind.as_u16() != 39001 {
+            continue;
+        }
+        let signer = ev.pubkey.to_hex();
+        if signer != relay_self {
+            return Err(EventError::RosterSignerMismatch {
+                expected: relay_self.clone(),
+                got: signer,
             });
         }
+        let created = ev.created_at.as_secs();
+        let id = ev.id.to_hex();
+        let replace = match &best {
+            None => true,
+            Some((c, i, _)) => created > *c || (created == *c && id < *i),
+        };
+        if replace {
+            best = Some((created, id, ev));
+        }
     }
-    // Deterministic ordering (NFR-1).
+
+    let Some((_, _, ev)) = best else {
+        return Err(EventError::RosterMissing(channel_id.to_string()));
+    };
+
+    let mut out = Vec::new();
+    for t in ev.tags.iter() {
+        let parts = t.clone().to_vec();
+        if parts.first().map(String::as_str) != Some("p") {
+            continue;
+        }
+        let Some(pubkey) = parts.get(1).cloned() else {
+            continue;
+        };
+        let role = parts
+            .iter()
+            .skip(2)
+            .find_map(|v| match v.as_str() {
+                "owner" => Some(waggle_core::gate::Role::Owner),
+                "admin" => Some(waggle_core::gate::Role::Admin),
+                _ => None,
+            })
+            .unwrap_or(waggle_core::gate::Role::Member);
+        out.push(waggle_core::gate::RosterEntry { pubkey, role });
+    }
     out.sort_by(|a, b| a.pubkey.cmp(&b.pubkey));
     out.dedup_by(|a, b| a.pubkey == b.pubkey);
     Ok(out)
 }
 
+/// Fetch and verify a verdict event; return the signed verdict string (PASS/…).
+pub fn fetch_verified_verdict(
+    project_root: &Path,
+    role: &str,
+    relay_url: &str,
+    verdict_event_id: &str,
+    nonce: &str,
+) -> Result<waggle_core::Verdict, EventError> {
+    let keys = load_keys(project_root, role)?;
+    let events = query(
+        &keys,
+        relay_url,
+        serde_json::json!([{ "ids": [verdict_event_id], "limit": 1 }]),
+        nonce,
+    )?;
+    let raw = events
+        .first()
+        .ok_or_else(|| EventError::VerdictNotFound(verdict_event_id.to_string()))?;
+    let ev = parse_and_verify_event(raw)?;
+    if ev.id.to_hex() != verdict_event_id {
+        return Err(EventError::VerdictNotFound(verdict_event_id.to_string()));
+    }
+
+    let has_marker = ev.tags.iter().any(|t| {
+        let parts = t.clone().to_vec();
+        parts.first().map(String::as_str) == Some("t")
+            && parts.get(1).map(String::as_str) == Some(waggle_core::gate::VERDICT_MARKER)
+    });
+    let has_token = waggle_core::Verdict::ALL
+        .iter()
+        .any(|token| ev.content.contains(token.as_str()));
+    if !has_marker && !has_token {
+        return Err(EventError::VerdictNotFound(verdict_event_id.to_string()));
+    }
+
+    for t in ev.tags.iter() {
+        let parts = t.clone().to_vec();
+        if parts.first().map(String::as_str) == Some("verdict")
+            || (parts.first().map(String::as_str) == Some("l")
+                && parts
+                    .get(1)
+                    .is_some_and(|v| matches!(v.as_str(), "PASS" | "FAIL" | "CONCERNS" | "WAIVED")))
+        {
+            if let Some(v) = parts.get(1) {
+                if let Ok(parsed) = v.parse::<waggle_core::Verdict>() {
+                    return Ok(parsed);
+                }
+            }
+        }
+    }
+
+    for token in waggle_core::Verdict::ALL {
+        if ev.content.contains(token.as_str()) {
+            return Ok(token);
+        }
+    }
+
+    Err(EventError::VerdictNotFound(verdict_event_id.to_string()))
+}
+
+/// Ensure the operator-claimed `--verdict` matches the signed verdict event.
+pub fn prove_verdict_claim(
+    project_root: &Path,
+    role: &str,
+    relay_url: &str,
+    verdict_event_id: &str,
+    claimed: waggle_core::Verdict,
+    nonce: &str,
+) -> Result<waggle_core::Verdict, EventError> {
+    let got = fetch_verified_verdict(project_root, role, relay_url, verdict_event_id, nonce)?;
+    if got != claimed {
+        return Err(EventError::VerdictMismatch {
+            event_id: verdict_event_id.to_string(),
+            expected: claimed.as_str().to_string(),
+            got: got.as_str().to_string(),
+        });
+    }
+    Ok(got)
+}
+
 #[cfg(test)]
 mod reconcile_input_tests {
+    use super::*;
+    use nostr::{EventBuilder, Keys, Kind, Tag};
+
+    #[test]
+    fn parse_and_verify_rejects_tampered_events() {
+        let keys = Keys::generate();
+        let event = EventBuilder::new(Kind::Reaction, "white_check_mark")
+            .tags(vec![Tag::parse(["e", "deadbeef"]).unwrap()])
+            .sign_with_keys(&keys)
+            .unwrap();
+        let mut raw = serde_json::to_value(&event).unwrap();
+        raw["content"] = serde_json::json!("tampered");
+        assert!(parse_and_verify_event(&raw).is_err());
+    }
+
+    #[test]
+    fn parse_and_verify_accepts_valid_events() {
+        let keys = Keys::generate();
+        let event = EventBuilder::new(Kind::Reaction, "white_check_mark")
+            .tags(vec![Tag::parse(["e", "aabb"]).unwrap()])
+            .sign_with_keys(&keys)
+            .unwrap();
+        let raw = serde_json::to_value(&event).unwrap();
+        let verified = parse_and_verify_event(&raw).unwrap();
+        assert_eq!(verified.pubkey, keys.public_key());
+    }
 
     #[test]
     fn reaction_parsing_ignores_actor_tags_entirely() {
-        // A hostile reaction carrying ["actor", "<victim>"] must still be attributed to
-        // the key that signed it. This is UP-18's attack, asserted directly.
-        let raw: Vec<serde_json::Value> = serde_json::from_str(
-            r#"[{
-                "id": "r1",
-                "pubkey": "attacker",
-                "content": "white_check_mark",
-                "created_at": 100,
-                "tags": [["e","v1"],["actor","victim-who-never-approved"]]
-            }]"#,
-        )
-        .unwrap();
-
-        // Mirrors the mapping in fetch_reactions.
-        let parsed: Vec<_> = raw
-            .iter()
-            .filter_map(|e| {
-                Some(waggle_core::gate::SignedReaction {
-                    event_id: e.get("id")?.as_str()?.to_string(),
-                    author_pubkey: e.get("pubkey")?.as_str()?.to_string(),
-                    emoji: e.get("content")?.as_str()?.to_string(),
-                    target_event: "v1".into(),
-                    created_at: e.get("created_at")?.as_u64()?,
-                })
-            })
-            .collect();
-
-        assert_eq!(parsed[0].author_pubkey, "attacker");
-        assert_ne!(parsed[0].author_pubkey, "victim-who-never-approved");
+        let keys = Keys::generate();
+        let event = EventBuilder::new(Kind::Reaction, "white_check_mark")
+            .tags(vec![
+                Tag::parse(["e", "v1"]).unwrap(),
+                Tag::parse(["actor", "victim-who-never-approved"]).unwrap(),
+            ])
+            .sign_with_keys(&keys)
+            .unwrap();
+        let raw = serde_json::to_value(&event).unwrap();
+        let verified = parse_and_verify_event(&raw).unwrap();
+        assert_eq!(verified.pubkey.to_hex(), keys.public_key().to_hex());
+        assert_ne!(verified.pubkey.to_hex(), "victim-who-never-approved");
     }
 }

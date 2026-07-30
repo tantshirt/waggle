@@ -1,4 +1,15 @@
+# Local-dev overlay. Opens auth/membership and publishes admin/tool ports.
+# Activate with: BUZZ_COMPOSE_DEV=true ./run.sh start
+# Prefer .env.dev.example for an open local .env; do not use this on prod.
+
 services:
+  relay:
+    environment:
+      # Force open local hive regardless of .env / prod defaults.
+      BUZZ_REQUIRE_AUTH_TOKEN: "false"
+      BUZZ_REQUIRE_RELAY_MEMBERSHIP: "false"
+      BUZZ_AUTO_MIGRATE: ${BUZZ_AUTO_MIGRATE:-true}
+
   postgres:
     ports:
       - "${POSTGRES_PORT:-5432}:5432"

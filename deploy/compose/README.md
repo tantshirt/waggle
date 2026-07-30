@@ -9,12 +9,28 @@ bundle pins an immutable digest instead.
 
 ## Quick start
 
+**Production (closed auth, loopback bind — default):**
+
 ```bash
 cd deploy/compose
 cp .env.example .env
 # Replace every CHANGE_ME — generate with: openssl rand -hex 32
 ./run.sh start
 ```
+
+**Local open hive (dev overlay):**
+
+```bash
+cd deploy/compose
+cp .env.dev.example .env
+# Replace every CHANGE_ME
+BUZZ_COMPOSE_DEV=true ./run.sh start
+```
+
+`.env.example` / `compose.yml` require `BUZZ_REQUIRE_AUTH_TOKEN` and
+`BUZZ_REQUIRE_RELAY_MEMBERSHIP` (default `true`). The relay host port binds to
+`127.0.0.1` unless you set `BUZZ_HTTP_HOST` deliberately. `compose.dev.yml`
+overrides auth open for local bring-up only.
 
 Wait for healthy services, then:
 

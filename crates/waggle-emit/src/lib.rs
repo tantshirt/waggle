@@ -32,6 +32,20 @@ pub enum EmitError {
         source: std::io::Error,
     },
 
+    #[error("could not remove {path}: {source}")]
+    Remove {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error("could not replace pack directory {path}: {source}")]
+    Replace {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
     #[error("skill {skill:?} referenced by menu item {code:?} was not found at {searched} — the method installation and the pack would disagree")]
     SkillMissing {
         skill: String,
@@ -77,19 +91,96 @@ pub struct EmitOutcome {
     pub files_written: Vec<PathBuf>,
     pub skills_copied: Vec<String>,
     /// Menu skills referenced but not materialized under the tool skills dir.
-    /// Surfaced as warnings — WDS and other modules sometimes disagree on skill ids.
+    /// Only populated when [`emit_pack`] is called with `allow_missing_skills = true`.
     pub skills_skipped: Vec<String>,
     /// Channel template names emitted, in order. Empty when the module ships none.
     pub channel_templates: Vec<String>,
 }
 
-/// Write the pack. The directory is created if absent; existing files are overwritten.
+/// Write the pack into a staging directory, validate, then atomically replace `out_dir/<module>`.
+///
+/// When `allow_missing_skills` is `false` (CI / sync default), a referenced skill without a
+/// materialized `SKILL.md` is a hard error. When `true`, missing skills are recorded in
+/// [`EmitOutcome::skills_skipped`] for local iteration.
 pub fn emit_pack(
     out_dir: &Path,
     packs: &[PersonaPack],
     meta: &PackMeta<'_>,
+    allow_missing_skills: bool,
 ) -> Result<EmitOutcome, EmitError> {
     let pack_dir = out_dir.join(meta.module);
+    let staging = out_dir.join(format!(".{}-emit-staging", meta.module));
+    let backup = out_dir.join(format!(".{}-emit-backup", meta.module));
+
+    // Drop leftover staging/backup from a previous interrupted emit.
+    remove_if_exists(&staging)?;
+    remove_if_exists(&backup)?;
+
+    let staged = match emit_into(&staging, packs, meta, allow_missing_skills) {
+        Ok(o) => o,
+        Err(e) => {
+            let _ = remove_if_exists(&staging);
+            return Err(e);
+        }
+    };
+
+    // Swap: current → backup, staging → current, then drop backup.
+    // Staging-then-rename removes stale agents/skills/workflows that a direct overwrite would leave.
+    if pack_dir.exists() {
+        std::fs::rename(&pack_dir, &backup).map_err(|source| EmitError::Replace {
+            path: pack_dir.clone(),
+            source,
+        })?;
+    }
+    if let Err(source) = std::fs::rename(&staging, &pack_dir) {
+        // Best-effort restore so a failed swap does not leave the pack missing.
+        if backup.exists() && !pack_dir.exists() {
+            let _ = std::fs::rename(&backup, &pack_dir);
+        }
+        let _ = remove_if_exists(&staging);
+        return Err(EmitError::Replace {
+            path: pack_dir,
+            source,
+        });
+    }
+    remove_if_exists(&backup)?;
+
+    // Paths were recorded under staging; rewrite them to the final pack dir.
+    let files_written = staged
+        .files_written
+        .into_iter()
+        .map(|p| {
+            let rel = p.strip_prefix(&staging).unwrap_or(&p);
+            pack_dir.join(rel)
+        })
+        .collect();
+
+    Ok(EmitOutcome {
+        pack_dir,
+        files_written,
+        skills_copied: staged.skills_copied,
+        skills_skipped: staged.skills_skipped,
+        channel_templates: staged.channel_templates,
+    })
+}
+
+fn remove_if_exists(path: &Path) -> Result<(), EmitError> {
+    if path.exists() {
+        std::fs::remove_dir_all(path).map_err(|source| EmitError::Remove {
+            path: path.to_path_buf(),
+            source,
+        })?;
+    }
+    Ok(())
+}
+
+/// Render pack contents into `pack_dir` (caller supplies staging or final).
+fn emit_into(
+    pack_dir: &Path,
+    packs: &[PersonaPack],
+    meta: &PackMeta<'_>,
+    allow_missing_skills: bool,
+) -> Result<EmitOutcome, EmitError> {
     let mut files = Vec::new();
 
     for sub in [".plugin", "agents", "skills", "workflows"] {
@@ -183,10 +274,16 @@ pub fn emit_pack(
     for skill in wanted {
         let src = meta.skills_source.join(&skill);
         if !src.join("SKILL.md").exists() {
-            // AD-6: report and continue — some modules (WDS) reference skill ids that the
-            // installer materializes under a different canonical folder name.
-            skills_skipped.push(skill);
-            continue;
+            if allow_missing_skills {
+                // Local iteration: report and continue when skill ids disagree with disk.
+                skills_skipped.push(skill);
+                continue;
+            }
+            return Err(EmitError::SkillMissing {
+                code: referring_menu_code(packs, &skill),
+                skill: skill.clone(),
+                searched: src,
+            });
         }
         let dst = pack_dir.join("skills").join(&skill);
         copy_dir(&src, &dst).map_err(|source| EmitError::SkillCopy {
@@ -197,12 +294,26 @@ pub fn emit_pack(
     }
 
     Ok(EmitOutcome {
-        pack_dir,
+        pack_dir: pack_dir.to_path_buf(),
         files_written: files,
         skills_copied,
         skills_skipped,
         channel_templates,
     })
+}
+
+fn referring_menu_code(packs: &[PersonaPack], skill: &str) -> String {
+    for pack in packs {
+        for item in &pack.menu {
+            if let MenuItem::Dispatch { code, skill: s, .. } = item {
+                if s == skill {
+                    return code.clone();
+                }
+            }
+        }
+    }
+    // always_skills / unattributed references
+    String::new()
 }
 
 #[derive(serde::Serialize)]
@@ -390,16 +501,28 @@ fn write(path: &Path, contents: &str) -> Result<(), EmitError> {
     })
 }
 
+/// Recursively copy `src` → `dst`. Rejects symlinks (does not follow them) and surfaces
+/// directory-entry I/O errors instead of silently dropping them.
 fn copy_dir(src: &Path, dst: &Path) -> std::io::Result<()> {
     std::fs::create_dir_all(dst)?;
     // Sorted so the copy order is deterministic (AD-4), not filesystem-dependent.
-    let mut entries: Vec<_> = std::fs::read_dir(src)?.filter_map(Result::ok).collect();
+    let mut entries = Vec::new();
+    for entry in std::fs::read_dir(src)? {
+        entries.push(entry?);
+    }
     entries.sort_by_key(std::fs::DirEntry::file_name);
 
     for entry in entries {
         let from = entry.path();
+        let meta = std::fs::symlink_metadata(&from)?;
+        if meta.file_type().is_symlink() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("refusing to copy symlink: {}", from.display()),
+            ));
+        }
         let to = dst.join(entry.file_name());
-        if from.is_dir() {
+        if meta.is_dir() {
             copy_dir(&from, &to)?;
         } else {
             std::fs::copy(&from, &to)?;
@@ -411,6 +534,7 @@ fn copy_dir(src: &Path, dst: &Path) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
     use waggle_core::compile_persona;
 
     fn sample() -> PersonaPack {
@@ -435,6 +559,48 @@ prompt = "Route the gate."
         )
         .unwrap();
         compile_persona("bmad-tea", &d, "desc").unwrap().0
+    }
+
+    fn sample_no_skills() -> PersonaPack {
+        let d = toml::from_str::<toml::Value>(
+            r#"
+name = "Murat"
+icon = "🧪"
+role = "Test architect"
+principles = ["Risk-based testing."]
+
+[[menu]]
+code = "GATE"
+description = "Release Gate"
+prompt = "Route the gate."
+"#,
+        )
+        .unwrap();
+        compile_persona("bmad-tea", &d, "desc").unwrap().0
+    }
+
+    fn meta<'a>(
+        module: &'a str,
+        skills_source: &'a Path,
+        always_skills: &'a [String],
+    ) -> PackMeta<'a> {
+        PackMeta {
+            module,
+            module_version: "v1.0.0",
+            skills_source,
+            instructions: "# instructions\n",
+            channel_templates: None,
+            module_agent_ids: &[],
+            all_agent_ids: &[],
+            help_csv: None,
+            always_skills,
+        }
+    }
+
+    fn write_skill(root: &Path, name: &str) {
+        let dir = root.join(name);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("SKILL.md"), format!("# {name}\n")).unwrap();
     }
 
     #[test]
@@ -490,5 +656,160 @@ prompt = "Route the gate."
         assert!(out.contains("`s-td`"));
         assert!(out.contains("`bmad-help`"));
         assert!(out.contains("`bmad-party-mode`"));
+    }
+
+    #[test]
+    fn copy_dir_rejects_symlinks() {
+        let tmp = std::env::temp_dir().join(format!("waggle-emit-symlink-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(&tmp).unwrap();
+
+        let src = tmp.join("src");
+        let dst = tmp.join("dst");
+        fs::create_dir_all(&src).unwrap();
+        fs::write(src.join("ok.txt"), "ok").unwrap();
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(src.join("ok.txt"), src.join("link.txt")).unwrap();
+            let err = copy_dir(&src, &dst).expect_err("symlink must be rejected");
+            assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+            assert!(
+                err.to_string().contains("refusing to copy symlink"),
+                "got: {err}"
+            );
+            assert!(!dst.join("link.txt").exists());
+        }
+        #[cfg(not(unix))]
+        {
+            // On non-unix, still exercise a plain copy path.
+            copy_dir(&src, &dst).unwrap();
+            assert!(dst.join("ok.txt").exists());
+        }
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn emit_removes_stale_agents_skills_and_workflows() {
+        let tmp = std::env::temp_dir().join(format!("waggle-emit-stale-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(&tmp).unwrap();
+
+        let skills = tmp.join("skills-src");
+        fs::create_dir_all(&skills).unwrap();
+        // First emit with no menu skills.
+        let packs = vec![sample_no_skills()];
+        let always: Vec<String> = Vec::new();
+        let m = meta("tea", &skills, &always);
+        emit_pack(&tmp, &packs, &m, false).unwrap();
+
+        let pack = tmp.join("tea");
+        // Plant stale files that a naive overwrite would leave behind.
+        fs::write(pack.join("agents").join("stale.persona.md"), "stale\n").unwrap();
+        fs::create_dir_all(pack.join("skills").join("stale-skill")).unwrap();
+        fs::write(
+            pack.join("skills").join("stale-skill").join("SKILL.md"),
+            "# stale\n",
+        )
+        .unwrap();
+        fs::write(pack.join("workflows").join("stale.yaml"), "stale: true\n").unwrap();
+
+        emit_pack(&tmp, &packs, &m, false).unwrap();
+
+        assert!(
+            !pack.join("agents").join("stale.persona.md").exists(),
+            "stale agent must be removed"
+        );
+        assert!(
+            !pack.join("skills").join("stale-skill").exists(),
+            "stale skill must be removed"
+        );
+        assert!(
+            !pack.join("workflows").join("stale.yaml").exists(),
+            "stale workflow must be removed"
+        );
+        assert!(pack.join("agents").join("bmad-tea.persona.md").exists());
+        assert!(!tmp.join(".tea-emit-staging").exists());
+        assert!(!tmp.join(".tea-emit-backup").exists());
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn missing_skill_is_hard_error_by_default() {
+        let tmp = std::env::temp_dir().join(format!("waggle-emit-missing-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(&tmp).unwrap();
+
+        let skills = tmp.join("skills-src");
+        fs::create_dir_all(&skills).unwrap();
+        // s-td is referenced by the sample menu but not materialized.
+        let packs = vec![sample()];
+        let always: Vec<String> = Vec::new();
+        let m = meta("tea", &skills, &always);
+
+        let err = emit_pack(&tmp, &packs, &m, false).expect_err("missing skill must fail");
+        match err {
+            EmitError::SkillMissing { skill, code, .. } => {
+                assert_eq!(skill, "s-td");
+                assert_eq!(code, "TD");
+            }
+            other => panic!("expected SkillMissing, got {other}"),
+        }
+        // Failed emit must not leave a partial pack or staging residue.
+        assert!(!tmp.join("tea").exists());
+        assert!(!tmp.join(".tea-emit-staging").exists());
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn allow_missing_skills_records_skip_warning() {
+        let tmp =
+            std::env::temp_dir().join(format!("waggle-emit-allow-missing-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(&tmp).unwrap();
+
+        let skills = tmp.join("skills-src");
+        fs::create_dir_all(&skills).unwrap();
+        let packs = vec![sample()];
+        let always: Vec<String> = Vec::new();
+        let m = meta("tea", &skills, &always);
+
+        let outcome = emit_pack(&tmp, &packs, &m, true).unwrap();
+        assert_eq!(outcome.skills_skipped, vec!["s-td".to_string()]);
+        assert!(outcome.skills_copied.is_empty());
+        assert!(tmp
+            .join("tea")
+            .join("agents")
+            .join("bmad-tea.persona.md")
+            .exists());
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn emit_copies_present_skills() {
+        let tmp = std::env::temp_dir().join(format!("waggle-emit-copy-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(&tmp).unwrap();
+
+        let skills = tmp.join("skills-src");
+        write_skill(&skills, "s-td");
+        let packs = vec![sample()];
+        let always: Vec<String> = Vec::new();
+        let m = meta("tea", &skills, &always);
+
+        let outcome = emit_pack(&tmp, &packs, &m, false).unwrap();
+        assert_eq!(outcome.skills_copied, vec!["s-td".to_string()]);
+        assert!(outcome.skills_skipped.is_empty());
+        assert!(tmp
+            .join("tea")
+            .join("skills")
+            .join("s-td")
+            .join("SKILL.md")
+            .exists());
+
+        let _ = fs::remove_dir_all(&tmp);
     }
 }

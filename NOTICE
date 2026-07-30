@@ -10,10 +10,14 @@ Buzz
 Waggle is a distribution that self-hosts Buzz (https://github.com/block/buzz),
 Copyright Block, Inc., licensed under the Apache License, Version 2.0.
 
-Waggle does not fork, vendor, or modify the Buzz source. Buzz is consumed as an
-unmodified upstream artifact, pinned by release tag in the BUZZ_VERSION file.
-Configuration emitted by waggle (persona packs, workflow YAML, deploy manifests)
-is original work of the waggle contributors.
+For local development and integration tests, this repository may contain a
+checkout under `vendor/buzz`, pinned by release tag in the `BUZZ_VERSION` file.
+That checkout is an unmodified upstream artifact for build and test; waggle
+does not publish a Buzz fork. Configuration emitted by waggle (persona packs,
+workflow YAML, deploy manifests) is original work of the waggle contributors.
+
+When a Buzz source tree is present under `vendor/buzz`, its Apache-2.0 NOTICE
+and LICENSE apply to that tree.
 
 --------------------------------------------------------------------------------
 BMAD Method
@@ -22,8 +26,12 @@ BMAD Method
 Waggle is compatible with, and derives module definitions from, the BMAD-METHOD
 project (https://github.com/bmad-code-org/BMAD-METHOD), which is licensed under
 the MIT License. MIT-licensed material incorporated into or derived by this
-project retains its original MIT license grant and copyright notice; the MIT
-license text accompanies such material where it is distributed.
+project retains its original MIT license grant and copyright notice.
+
+Compiled packs under `packs/` and mirrored skill trees under `.claude/skills/`
+include BMAD-derived content. The MIT license text for that material is at
+`third_party/BMAD-METHOD-LICENSE` (and accompanies each distributed pack when
+packs are published as release artifacts).
 
 TRADEMARK NOTICE
 

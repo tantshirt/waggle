@@ -135,7 +135,8 @@ pub fn provision(
             reason: format!("could not encode npub: {e}"),
         })?;
 
-    // The secret's only appearance. Written 0600, then dropped.
+    // The secret's only appearance. Written 0600 (temp + rename), then dropped.
+    // On --force, the previous secret is kept as `{role}.nsec.bak` before rotate.
     let secret_hex = keys.secret_key().to_secret_hex();
     write_secret(&sec_path, role, &secret_hex)?;
 
@@ -157,38 +158,75 @@ pub fn provision(
     })
 }
 
+fn secret_backup_path(path: &Path) -> PathBuf {
+    // tea.nsec → tea.nsec.bak (keep previous on force rotate).
+    PathBuf::from(format!("{}.bak", path.display()))
+}
+
+fn secret_temp_path(path: &Path) -> PathBuf {
+    PathBuf::from(format!("{}.tmp", path.display()))
+}
+
+fn map_unwritable(role: &str, path: &Path, source: std::io::Error) -> IdentityError {
+    IdentityError::Unwritable {
+        role: role.to_string(),
+        path: path.to_path_buf(),
+        source,
+    }
+}
+
+/// Persist secret material: backup existing → write temp 0600 → rename → chmod 0600.
+///
+/// `OpenOptions::mode` only applies on create, so a `--force` truncate of a world-readable
+/// file would leave unsafe perms. Always chmod after write, and rotate via temp + rename.
 #[cfg(unix)]
 fn write_secret(path: &Path, role: &str, secret_hex: &str) -> Result<(), IdentityError> {
-    use std::os::unix::fs::OpenOptionsExt;
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 
-    let mut f = fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .mode(0o600) // owner-only, set at create time — never a window at 0644
-        .open(path)
-        .map_err(|source| IdentityError::Unwritable {
-            role: role.to_string(),
-            path: path.to_path_buf(),
-            source,
-        })?;
+    if path.exists() {
+        let bak = secret_backup_path(path);
+        fs::copy(path, &bak).map_err(|source| map_unwritable(role, &bak, source))?;
+        fs::set_permissions(&bak, fs::Permissions::from_mode(0o600))
+            .map_err(|source| map_unwritable(role, &bak, source))?;
+    }
 
-    f.write_all(secret_hex.as_bytes())
-        .and_then(|()| f.write_all(b"\n"))
-        .map_err(|source| IdentityError::Unwritable {
-            role: role.to_string(),
-            path: path.to_path_buf(),
-            source,
-        })
+    let tmp = secret_temp_path(path);
+    {
+        let mut f = fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(&tmp)
+            .map_err(|source| map_unwritable(role, &tmp, source))?;
+
+        f.write_all(secret_hex.as_bytes())
+            .and_then(|()| f.write_all(b"\n"))
+            .and_then(|()| f.sync_all())
+            .map_err(|source| map_unwritable(role, &tmp, source))?;
+    }
+
+    // Always enforce owner-only after write (covers --force over a loose mode).
+    fs::set_permissions(&tmp, fs::Permissions::from_mode(0o600))
+        .map_err(|source| map_unwritable(role, &tmp, source))?;
+    fs::rename(&tmp, path).map_err(|source| map_unwritable(role, path, source))?;
+    fs::set_permissions(path, fs::Permissions::from_mode(0o600))
+        .map_err(|source| map_unwritable(role, path, source))?;
+    Ok(())
 }
 
 #[cfg(not(unix))]
 fn write_secret(path: &Path, role: &str, secret_hex: &str) -> Result<(), IdentityError> {
-    fs::write(path, format!("{secret_hex}\n")).map_err(|source| IdentityError::Unwritable {
-        role: role.to_string(),
-        path: path.to_path_buf(),
-        source,
-    })
+    if path.exists() {
+        let bak = secret_backup_path(path);
+        fs::copy(path, &bak).map_err(|source| map_unwritable(role, &bak, source))?;
+    }
+
+    let tmp = secret_temp_path(path);
+    fs::write(&tmp, format!("{secret_hex}\n"))
+        .map_err(|source| map_unwritable(role, &tmp, source))?;
+    fs::rename(&tmp, path).map_err(|source| map_unwritable(role, path, source))?;
+    Ok(())
 }
 
 /// Load the public half of an identity. **Never reads the secret file.**
@@ -334,7 +372,13 @@ pub fn register_member(
     }
 
     let out = std::process::Command::new(buzz_admin)
-        .args(["add-member", "--pubkey", &id.public_key_hex, "--role", member_role])
+        .args([
+            "add-member",
+            "--pubkey",
+            &id.public_key_hex,
+            "--role",
+            member_role,
+        ])
         .output()
         .map_err(|source| IdentityError::AdminUnavailable {
             path: buzz_admin.to_path_buf(),
@@ -403,8 +447,14 @@ mod tests {
     fn force_replaces_the_key() {
         let root = tmp("force");
         let first = provision(&root, "tea", false).unwrap();
+        let first_secret = fs::read_to_string(root.join("keys/tea.nsec")).unwrap();
         let second = provision(&root, "tea", true).unwrap();
         assert_ne!(first.public_key_hex, second.public_key_hex);
+        let bak = fs::read_to_string(root.join("keys/tea.nsec.bak")).unwrap();
+        assert_eq!(
+            bak, first_secret,
+            "force rotate must keep the previous secret as .nsec.bak"
+        );
     }
 
     #[test]
@@ -419,6 +469,27 @@ mod tests {
             .mode()
             & 0o777;
         assert_eq!(mode, 0o600, "secret key must be owner-only, got {mode:o}");
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn force_reapplies_owner_only_even_when_existing_mode_was_loose() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tmp("force-perms");
+        provision(&root, "tea", false).unwrap();
+        let sec = root.join("keys/tea.nsec");
+        let mut loose = fs::metadata(&sec).unwrap().permissions();
+        loose.set_mode(0o644);
+        fs::set_permissions(&sec, loose).unwrap();
+        provision(&root, "tea", true).unwrap();
+        let mode = fs::metadata(&sec).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "force rotate must chmod 0600, got {mode:o}");
+        let bak_mode = fs::metadata(root.join("keys/tea.nsec.bak"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(bak_mode, 0o600, "backup must also be owner-only");
     }
 
     #[test]

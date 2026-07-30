@@ -1,4 +1,8 @@
 # Watch upstream BMAD Method releases and open a PR when the pin should move.
+#
+# Token hygiene: the job that runs `npx bmad-method` only has contents:read.
+# Write / pull-request permissions are granted only to the follow-up job that
+# applies the artifact and opens the PR — never to the untrusted installer.
 name: bmad-sync
 
 on:
@@ -9,13 +13,17 @@ on:
   repository_dispatch:
     types: [bmad-release]
 
+# Default: read-only. Jobs that need write declare it explicitly.
 permissions:
-  contents: write
-  pull-requests: write
+  contents: read
 
 jobs:
-  check-and-pr:
+  check:
     runs-on: ubuntu-latest
+    outputs:
+      unchanged: ${{ steps.skip.outputs.unchanged }}
+      current: ${{ steps.pin.outputs.current }}
+      latest: ${{ steps.latest.outputs.version }}
     steps:
       - uses: actions/checkout@v4
 
@@ -41,23 +49,33 @@ jobs:
             echo "unchanged=false" >> "$GITHUB_OUTPUT"
           fi
 
+  # Install / compile with a read-only token only. Compromised package code
+  # must not inherit contents:write or pull-requests:write.
+  install:
+    needs: check
+    if: needs.check.outputs.unchanged == 'false'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
       - name: Setup Node
-        if: steps.skip.outputs.unchanged == 'false'
         uses: actions/setup-node@v4
         with:
           node-version: "24"
 
       - name: Setup Rust
-        if: steps.skip.outputs.unchanged == 'false'
         uses: dtolnay/rust-toolchain@stable
         with:
           toolchain: "1.95.0"
 
       - name: Bump pin + install + compile
-        if: steps.skip.outputs.unchanged == 'false'
         run: |
           set -euo pipefail
-          NEW="${{ steps.latest.outputs.version }}"
+          NEW="${{ needs.check.outputs.latest }}"
           sed -i "s/^BMAD_METHOD_VERSION=.*/BMAD_METHOD_VERSION=${NEW}/" BUZZ_VERSION
           MODULES=$(grep '^BMAD_MODULES=' BUZZ_VERSION | cut -d= -f2)
           npx --yes "bmad-method@${NEW}" install \
@@ -74,19 +92,46 @@ jobs:
           chmod +x ./scripts/verify-sync.sh
           ./scripts/verify-sync.sh
 
+      - name: Upload sync artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: bmad-sync-${{ needs.check.outputs.latest }}
+          path: |
+            BUZZ_VERSION
+            _bmad/
+            packs/
+            .claude/skills/
+          if-no-files-found: error
+
+  # Write-capable job: apply artifact + open PR. Does not execute npm/npx.
+  open-pr:
+    needs: [check, install]
+    if: needs.check.outputs.unchanged == 'false'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download sync artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: bmad-sync-${{ needs.check.outputs.latest }}
+          path: .
+
       - name: Open or update PR
-        if: steps.skip.outputs.unchanged == 'false'
         uses: peter-evans/create-pull-request@v6
         with:
-          branch: chore/bmad-sync-${{ steps.latest.outputs.version }}
-          title: "chore: sync BMAD Method ${{ steps.latest.outputs.version }}"
+          branch: chore/bmad-sync-${{ needs.check.outputs.latest }}
+          title: "chore: sync BMAD Method ${{ needs.check.outputs.latest }}"
           commit-message: |
-            chore: bump BMAD Method to ${{ steps.latest.outputs.version }}
+            chore: bump BMAD Method to ${{ needs.check.outputs.latest }}
 
             Regenerated packs and sync state via waggle sync.
           body: |
             ## Summary
-            - Upstream `bmad-method` moved from `${{ steps.pin.outputs.current }}` to `${{ steps.latest.outputs.version }}`
+            - Upstream `bmad-method` moved from `${{ needs.check.outputs.current }}` to `${{ needs.check.outputs.latest }}`
             - `BUZZ_VERSION` pin bumped; packs recompiled; `verify-sync.sh` passed
 
             ## Test plan

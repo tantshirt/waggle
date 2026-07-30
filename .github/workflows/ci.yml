@@ -1,0 +1,87 @@
+# Continuous integration for Waggle release hygiene.
+name: ci
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: "-Dwarnings"
+
+jobs:
+  rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.95.0"
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: waggle
+
+      - name: Format
+        working-directory: waggle
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        working-directory: waggle
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Test
+        working-directory: waggle
+        run: cargo test --workspace
+
+      - name: Audit
+        working-directory: waggle
+        run: |
+          cargo install cargo-audit --locked || true
+          cargo audit || {
+            echo "::warning::cargo audit reported issues (see RUSTSEC-2024-0384 for unmaintained instant)"
+            cargo audit --deny warnings 2>/dev/null || cargo audit
+          }
+
+  verify:
+    runs-on: ubuntu-latest
+    needs: rust
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.95.0"
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: waggle
+
+      - name: Build CLI
+        working-directory: waggle
+        run: cargo build -p waggle-cli
+
+      - name: Compose overlay sanity
+        working-directory: waggle
+        run: |
+          chmod +x ./scripts/verify-compose.sh
+          ./scripts/verify-compose.sh
+
+      - name: Pack compile (strict)
+        working-directory: waggle
+        run: |
+          chmod +x ./scripts/verify-compile.sh ./scripts/verify-pack-contract.sh
+          ./scripts/verify-compile.sh
+          ./scripts/verify-pack-contract.sh
+
+      - name: CLI contract
+        working-directory: waggle
+        run: |
+          chmod +x ./scripts/verify-cli.sh
+          ./scripts/verify-cli.sh
