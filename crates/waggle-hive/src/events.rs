@@ -16,13 +16,23 @@ use std::path::Path;
 
 use base64::Engine as _;
 use nostr::util::JsonUtil;
-use nostr::{EventBuilder, Keys, Kind, Tag};
+use nostr::{EventBuilder, Keys, Kind, Tag, Timestamp};
 use sha2::{Digest, Sha256};
 
 use waggle_core::ArtifactEvent;
 
 /// Standard NIP-29 group message. AD-8: standard kinds first.
 const KIND_GROUP_MESSAGE: u16 = 9;
+
+/// Blossom upload auth (BUD-02).
+const KIND_BLOSSOM_AUTH: u16 = 24_242;
+
+/// Upstream's generic-file upload cap (`max_file_bytes` in buzz-media). Not in NIP-11.
+/// Bodies larger than this cannot go inline *or* by reference.
+pub const MAX_BLOB_BYTES: usize = 104_857_600;
+
+/// Marker `t` tag on events whose body is a content-addressed blob reference (FR-16).
+pub const TAG_REF: &str = "ref";
 
 #[derive(Debug, thiserror::Error)]
 pub enum EventError {
@@ -55,8 +65,11 @@ pub enum EventError {
     #[error("artifact is invalid: {0}")]
     Invalid(#[from] waggle_core::artifact::ArtifactError),
 
-    #[error("artifact body is {bytes} bytes, over the relay's {limit}-byte content limit — the substrate's media store accepts images only, so it cannot be carried by reference (UP-16); split the artifact or shorten it")]
+    #[error("artifact body is {bytes} bytes, over the media store's {limit}-byte upload limit — cannot be published inline or by reference; split the artifact or shorten it")]
     TooLarge { bytes: usize, limit: usize },
+
+    #[error("uploaded blob hash mismatch: expected {expected}, got {got}")]
+    HashMismatch { expected: String, got: String },
 }
 
 /// Load a role's keys. Private: the secret never leaves this module (AD-14).
@@ -87,7 +100,7 @@ fn load_keys(project_root: &Path, role: &str) -> Result<Keys, EventError> {
 /// Tags follow the relay's own implementation: `u` (url), `method`, `nonce`, and
 /// `payload` (sha256 of the body). The nonce is what allows two identical requests in
 /// quick succession without one being treated as a replay.
-fn nip98_header(
+pub(crate) fn nip98_header(
     keys: &Keys,
     method: &str,
     url: &str,
@@ -175,18 +188,45 @@ pub fn discover_limits(relay_url: &str) -> Limits {
     }
 }
 
+/// How the artifact body reached the hive (FR-16 / AD-15).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Transport {
+    /// Body fits the content limit and was published inline in kind:9.
+    Inline,
+    /// Body was stored via Blossom `PUT /upload`; the event carries a hash reference.
+    Reference {
+        sha256: String,
+        url: String,
+        bytes: usize,
+    },
+}
+
 /// What the relay accepted.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Published {
     pub event_id: String,
     /// The publishing identity, so callers can attribute without touching the secret.
     pub pubkey: String,
+    pub transport: Transport,
+}
+
+/// A content-addressed blob accepted by the relay's upload endpoint.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BlobRef {
+    pub sha256: String,
+    pub url: String,
+    pub bytes: usize,
 }
 
 /// Sign and publish an artifact, handoff, verdict, or gate record.
 ///
 /// The event is a standard kind:9 group message carrying waggle's typed tags, so a
 /// third-party NIP-29 client still renders it (NFR-6).
+///
+/// **FR-16 / AD-15:** bodies within the content limit publish inline. Larger bodies are
+/// uploaded via the relay's Blossom `PUT /upload` (not `buzz-cli`, which is images-only)
+/// and the event carries a content-addressed reference. Bodies over the media-store cap
+/// are refused with a specific error — never truncated or silently dropped.
 pub fn publish_artifact(
     project_root: &Path,
     role: &str,
@@ -208,29 +248,40 @@ pub fn publish_artifact_with_limits(
 ) -> Result<Published, EventError> {
     artifact.validate()?;
 
-    // FR-16 / AD-15: check size *before* publishing, so an oversized artifact produces a
-    // specific refusal rather than a relay 400 or, worse, a silent truncation.
-    //
-    // Reference-carrying is not available: the substrate's Blossom store accepts only
-    // image MIME types (image/jpeg|png|gif|webp), so a large markdown artifact cannot be
-    // stored there and referenced. Refusing loudly is the honest behaviour until an
-    // alternative exists — see UP-16.
     let limits = limits.unwrap_or_else(|| discover_limits(relay_url));
     let len = artifact.body.len();
-    if len > limits.max_content {
-        return Err(EventError::TooLarge {
-            bytes: len,
-            limit: limits.max_content,
-        });
-    }
+
+    refuse_if_over_media_cap(len)?;
+
     let keys = load_keys(project_root, role)?;
+
+    let (content, mut extra_tags, transport) = if len > limits.max_content {
+        let blob = upload_blob(&keys, relay_url, artifact.body.as_bytes())?;
+        let content = reference_body(&blob);
+        let extra = vec![
+            Tag::parse(["x", &blob.sha256]).map_err(|e| EventError::Build(e.to_string()))?,
+            Tag::parse(["t", TAG_REF]).map_err(|e| EventError::Build(e.to_string()))?,
+        ];
+        (
+            content,
+            extra,
+            Transport::Reference {
+                sha256: blob.sha256,
+                url: blob.url,
+                bytes: blob.bytes,
+            },
+        )
+    } else {
+        (artifact.body.clone(), Vec::new(), Transport::Inline)
+    };
 
     let mut tags = Vec::new();
     for t in artifact.tags() {
         tags.push(Tag::parse(t).map_err(|e| EventError::Build(e.to_string()))?);
     }
+    tags.append(&mut extra_tags);
 
-    let event = EventBuilder::new(Kind::Custom(KIND_GROUP_MESSAGE), artifact.body.clone())
+    let event = EventBuilder::new(Kind::Custom(KIND_GROUP_MESSAGE), content)
         .tags(tags)
         .sign_with_keys(&keys)
         .map_err(|e| EventError::Build(e.to_string()))?;
@@ -264,7 +315,155 @@ pub fn publish_artifact_with_limits(
         });
     }
 
-    Ok(Published { event_id, pubkey })
+    Ok(Published {
+        event_id,
+        pubkey,
+        transport,
+    })
+}
+
+/// Refuse bodies that exceed even the media-store upload cap (FR-16).
+fn refuse_if_over_media_cap(len: usize) -> Result<(), EventError> {
+    if len > MAX_BLOB_BYTES {
+        return Err(EventError::TooLarge {
+            bytes: len,
+            limit: MAX_BLOB_BYTES,
+        });
+    }
+    Ok(())
+}
+
+/// Compact, machine-readable body for a reference-carrying event.
+pub fn reference_body(blob: &BlobRef) -> String {
+    serde_json::json!({
+        "waggle": "blob-ref",
+        "sha256": blob.sha256,
+        "url": blob.url,
+        "bytes": blob.bytes,
+    })
+    .to_string()
+}
+
+/// Blossom auth header for `PUT /upload` (kind 24242, URL-safe base64).
+fn blossom_upload_auth(keys: &Keys, sha256: &str) -> Result<String, EventError> {
+    let now = Timestamp::now().as_secs();
+    let tags = [
+        Tag::parse(["t", "upload"]),
+        Tag::parse(["x", sha256]),
+        Tag::parse(["expiration", &(now + 300).to_string()]),
+    ];
+    let mut built = Vec::new();
+    for t in tags {
+        built.push(t.map_err(|e| EventError::Build(e.to_string()))?);
+    }
+
+    let event = EventBuilder::new(Kind::Custom(KIND_BLOSSOM_AUTH), "Upload")
+        .tags(built)
+        .sign_with_keys(keys)
+        .map_err(|e| EventError::Build(e.to_string()))?;
+
+    Ok(format!(
+        "Nostr {}",
+        base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(event.as_json().as_bytes())
+    ))
+}
+
+/// Upload raw bytes to the relay's Blossom endpoint. Speaks HTTP directly — `buzz-cli`
+/// upload is images-only and must not be used for method artifacts (UP-16 withdrawn).
+pub fn upload_blob(keys: &Keys, relay_url: &str, bytes: &[u8]) -> Result<BlobRef, EventError> {
+    let sha256 = hex_encode(&Sha256::digest(bytes));
+    let url = format!("{}/upload", relay_url.trim_end_matches('/'));
+    let auth = blossom_upload_auth(keys, &sha256)?;
+
+    let client = reqwest::blocking::Client::new();
+    let resp = client
+        .put(&url)
+        .header("Authorization", auth)
+        .header("X-SHA-256", &sha256)
+        .header("Content-Type", "application/octet-stream")
+        .body(bytes.to_vec())
+        .send()
+        .map_err(|source| EventError::Unreachable {
+            url: url.clone(),
+            source,
+        })?;
+
+    let status = resp.status();
+    let text = resp.text().unwrap_or_default();
+    if !status.is_success() {
+        return Err(EventError::Rejected {
+            url,
+            status: status.as_u16(),
+            body: text.chars().take(300).collect(),
+        });
+    }
+
+    let desc: serde_json::Value =
+        serde_json::from_str(&text).map_err(|e| EventError::Unparseable(e.to_string()))?;
+    let got = desc
+        .get("sha256")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default();
+    if got != sha256 {
+        return Err(EventError::HashMismatch {
+            expected: sha256,
+            got: got.to_string(),
+        });
+    }
+    let blob_url = desc
+        .get("url")
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .to_string();
+    if blob_url.is_empty() {
+        return Err(EventError::Unparseable(
+            "upload response missing url".into(),
+        ));
+    }
+
+    Ok(BlobRef {
+        sha256,
+        url: blob_url,
+        bytes: bytes.len(),
+    })
+}
+
+/// Fetch a blob and verify its SHA-256 matches (FR-16 retrieve path).
+pub fn fetch_and_verify(blob_url: &str, expected_sha256: &str) -> Result<Vec<u8>, EventError> {
+    let client = reqwest::blocking::Client::new();
+    let resp = client
+        .get(blob_url)
+        .send()
+        .map_err(|source| EventError::Unreachable {
+            url: blob_url.to_string(),
+            source,
+        })?;
+
+    let status = resp.status();
+    if !status.is_success() {
+        let body = resp.text().unwrap_or_default();
+        return Err(EventError::Rejected {
+            url: blob_url.to_string(),
+            status: status.as_u16(),
+            body: body.chars().take(300).collect(),
+        });
+    }
+
+    let bytes = resp
+        .bytes()
+        .map_err(|source| EventError::Unreachable {
+            url: blob_url.to_string(),
+            source,
+        })?
+        .to_vec();
+    let got = hex_encode(&Sha256::digest(&bytes));
+    if got != expected_sha256 {
+        return Err(EventError::HashMismatch {
+            expected: expected_sha256.to_string(),
+            got,
+        });
+    }
+    Ok(bytes)
 }
 
 /// Query the log by tag, returning **fully signed** events (FR-22).
@@ -461,10 +660,27 @@ mod size_tests {
     }
 
     #[test]
-    fn oversized_body_is_refused_before_any_network_call() {
-        // Pointing at a dead port proves the size check runs first: a network attempt
-        // would surface as Unreachable, not TooLarge.
-        let root = identity("over");
+    fn body_over_media_cap_is_refused_before_any_network_call() {
+        // Don't allocate 100MB in a unit test — exercise the gate directly.
+        let err = refuse_if_over_media_cap(MAX_BLOB_BYTES + 1).unwrap_err();
+        match err {
+            EventError::TooLarge { bytes, limit } => {
+                assert_eq!((bytes, limit), (MAX_BLOB_BYTES + 1, MAX_BLOB_BYTES));
+                let msg = err.to_string();
+                assert!(msg.contains("upload limit"), "{msg}");
+                assert!(msg.contains("split"), "{msg}");
+                assert!(!msg.contains("images only"), "{msg}");
+            }
+            other => panic!("expected TooLarge, got {other}"),
+        }
+        assert!(refuse_if_over_media_cap(MAX_BLOB_BYTES).is_ok());
+    }
+
+    #[test]
+    fn oversized_for_inline_attempts_reference_upload_before_event_post() {
+        // Body over the content limit but under the media cap takes the Blossom path.
+        // Against a dead port that surfaces as Unreachable on /upload, not TooLarge.
+        let root = identity("over-inline");
         let limits = Limits {
             max_message: 1000,
             max_content: 500,
@@ -478,17 +694,10 @@ mod size_tests {
             Some(limits),
         )
         .unwrap_err();
-
-        match err {
-            EventError::TooLarge { bytes, limit } => {
-                assert_eq!((bytes, limit), (501, 500));
-                // NFR-4: the message must say what to do, not merely that it failed.
-                let msg = EventError::TooLarge { bytes, limit }.to_string();
-                assert!(msg.contains("images only"), "{msg}");
-                assert!(msg.contains("split"), "{msg}");
-            }
-            other => panic!("expected TooLarge, got {other}"),
-        }
+        assert!(
+            matches!(err, EventError::Unreachable { ref url, .. } if url.ends_with("/upload")),
+            "expected Unreachable on /upload, got {err}"
+        );
     }
 
     #[test]
@@ -507,10 +716,10 @@ mod size_tests {
             Some(limits),
         )
         .unwrap_err();
-        // It gets past the size gate and fails on the network instead.
+        // It gets past the size gate and fails on the event POST instead.
         assert!(
-            matches!(err, EventError::Unreachable { .. }),
-            "expected the size check to pass, got {err}"
+            matches!(err, EventError::Unreachable { ref url, .. } if url.ends_with("/events")),
+            "expected the size check to pass into /events, got {err}"
         );
     }
 
@@ -519,6 +728,49 @@ mod size_tests {
         let l = discover_limits("http://127.0.0.1:1");
         assert_eq!(l, Limits::default());
         assert_eq!(l.max_content, 262_144);
+    }
+
+    #[test]
+    fn reference_body_is_compact_and_carries_the_hash() {
+        let blob = BlobRef {
+            sha256: "ab".repeat(32),
+            url: "http://localhost:3100/media/ab.bin".into(),
+            bytes: 300_000,
+        };
+        let body = reference_body(&blob);
+        assert!(body.len() < 500, "reference body must fit easily: {}", body.len());
+        let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["waggle"], "blob-ref");
+        assert_eq!(v["sha256"], blob.sha256);
+        assert_eq!(v["url"], blob.url);
+        assert_eq!(v["bytes"], 300_000);
+    }
+
+    #[test]
+    fn blossom_auth_is_kind_24242_with_url_safe_encoding() {
+        let (_, keys) = {
+            let root = identity("blossom-auth");
+            let keys = load_keys(&root, "tea").unwrap();
+            (root, keys)
+        };
+        let header = blossom_upload_auth(&keys, &"ab".repeat(32)).unwrap();
+        let b64 = header.strip_prefix("Nostr ").expect("scheme");
+        // URL_SAFE_NO_PAD — no '+' '/' or '=' padding.
+        assert!(!b64.contains('+') && !b64.contains('/') && !b64.contains('='), "{b64}");
+        let json = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .decode(b64)
+            .unwrap();
+        let ev: serde_json::Value = serde_json::from_slice(&json).unwrap();
+        assert_eq!(ev["kind"], KIND_BLOSSOM_AUTH);
+        let tags: Vec<(String, String)> = ev["tags"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| (t[0].as_str().unwrap().into(), t[1].as_str().unwrap().into()))
+            .collect();
+        assert!(tags.iter().any(|(n, v)| n == "t" && v == "upload"));
+        assert!(tags.iter().any(|(n, _)| n == "x"));
+        assert!(tags.iter().any(|(n, _)| n == "expiration"));
     }
 }
 

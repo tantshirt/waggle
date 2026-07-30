@@ -1,0 +1,21 @@
+{
+  "$schema": "https://open-plugin-spec.org/schema/v1/plugin.json",
+  "id": "dev.waggle.pack.bmb",
+  "name": "waggle — bmb",
+  "version": "2.1.0",
+  "description": "0 agents compiled from the bmb module of a BMAD Method installation.",
+  "author": "The waggle contributors",
+  "license": "Apache-2.0",
+  "personas": [],
+  "pack_instructions": "instructions.md",
+  "defaults": {
+    "triggers": {
+      "mentions": true,
+      "keywords": [],
+      "all_messages": false
+    },
+    "subscribe": [],
+    "thread_replies": true,
+    "broadcast_replies": false
+  }
+}

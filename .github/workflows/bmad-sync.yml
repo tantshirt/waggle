@@ -1,0 +1,100 @@
+# Watch upstream BMAD Method releases and open a PR when the pin should move.
+name: bmad-sync
+
+on:
+  schedule:
+    # Daily 06:00 UTC
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+  repository_dispatch:
+    types: [bmad-release]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  check-and-pr:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read pinned BMAD version
+        id: pin
+        run: |
+          ver=$(grep '^BMAD_METHOD_VERSION=' BUZZ_VERSION | cut -d= -f2)
+          echo "current=$ver" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve latest bmad-method on npm
+        id: latest
+        run: |
+          latest=$(npm view bmad-method version)
+          echo "version=$latest" >> "$GITHUB_OUTPUT"
+          echo "Pinned: ${{ steps.pin.outputs.current }}  Latest: $latest"
+
+      - name: Skip if unchanged
+        id: skip
+        run: |
+          if [[ "${{ steps.pin.outputs.current }}" == "${{ steps.latest.outputs.version }}" ]]; then
+            echo "unchanged=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "unchanged=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Setup Node
+        if: steps.skip.outputs.unchanged == 'false'
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Setup Rust
+        if: steps.skip.outputs.unchanged == 'false'
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: "1.95.0"
+
+      - name: Bump pin + install + compile
+        if: steps.skip.outputs.unchanged == 'false'
+        run: |
+          set -euo pipefail
+          NEW="${{ steps.latest.outputs.version }}"
+          sed -i "s/^BMAD_METHOD_VERSION=.*/BMAD_METHOD_VERSION=${NEW}/" BUZZ_VERSION
+          MODULES=$(grep '^BMAD_MODULES=' BUZZ_VERSION | cut -d= -f2)
+          npx --yes "bmad-method@${NEW}" install \
+            --directory "$PWD" \
+            --modules "$MODULES" \
+            --tools claude-code \
+            --all-stable \
+            --action update \
+            --yes
+          cargo build -p waggle-cli
+          # Offline: compile packs + identities + sync state; no relay calls.
+          # --allow-unsupported lets the PR land even if BMAD_SUPPORTED needs a follow-up bump.
+          ./target/debug/waggle sync --skip-install --offline --allow-unsupported --skip-global-skills
+          chmod +x ./scripts/verify-sync.sh
+          ./scripts/verify-sync.sh
+
+      - name: Open or update PR
+        if: steps.skip.outputs.unchanged == 'false'
+        uses: peter-evans/create-pull-request@v6
+        with:
+          branch: chore/bmad-sync-${{ steps.latest.outputs.version }}
+          title: "chore: sync BMAD Method ${{ steps.latest.outputs.version }}"
+          commit-message: |
+            chore: bump BMAD Method to ${{ steps.latest.outputs.version }}
+
+            Regenerated packs and sync state via waggle sync.
+          body: |
+            ## Summary
+            - Upstream `bmad-method` moved from `${{ steps.pin.outputs.current }}` to `${{ steps.latest.outputs.version }}`
+            - `BUZZ_VERSION` pin bumped; packs recompiled; `verify-sync.sh` passed
+
+            ## Test plan
+            - [ ] Review `_bmad/_config/manifest.yaml` / pack diffs
+            - [ ] Local: `waggle sync --skip-install` against a running relay
+            - [ ] Spot-check `#help` canvas and phase channel names
+          add-paths: |
+            BUZZ_VERSION
+            _bmad/
+            packs/
+            .claude/skills/

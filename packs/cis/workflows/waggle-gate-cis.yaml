@@ -1,0 +1,11 @@
+description: "Release gate notice for the cis module. A human reaction on a verdict event posts an advisory notice. The authoritative, agent-signed gate record is produced by `waggle gate`, which derives the approver from the reaction's signature-bound pubkey and checks it against the relay-signed admin list."
+enabled: true
+name: "waggle-gate-cis"
+steps:
+  - action: "send_message"
+    id: "publish_gate_record"
+    name: "Post an advisory approval notice (not the record — see UP-18)"
+    text: "waggle-gate-notice\nmodule: cis\nverdict-event: {{trigger.message_id}}\nreaction: {{trigger.emoji}}\nnote: advisory only — this message is relay-signed and its author field is not trustworthy. Run `waggle gate --verdict-event <id>` to produce the signed record."
+trigger:
+  emoji: "white_check_mark"
+  on: "reaction_added"

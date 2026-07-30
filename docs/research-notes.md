@@ -538,12 +538,14 @@ template store inside the compiled pack** and never touch the desktop app.
 
 ### 8.3 The two real gaps
 
-**Roster membership needs a live managed agent.** Resolution scans managed-agent events
-whose `content.persona_id` matches, to find pubkeys. Those are created by
-`buzz agents draft-create`, which *"opens a prefilled create-agent form in the owner's
-Buzz Desktop"* — a human-in-the-loop desktop flow with no headless equivalent. This is
-the **same blocker as Story 1.7**: without a running agent instance there is nothing to
-add to a channel.
+**Roster membership needs a managed-agent *record* with `persona_id` — not a Desktop
+session.** Resolution scans managed-agent events (kind:30177) whose `content.persona_id`
+matches, to find pubkeys. Early research treated `buzz agents draft-create` (a Desktop
+human-in-the-loop flow) as the only path; that was wrong (review F-12). Kind 30177 is an
+ordinary self-authored event publishable via `POST /events`. waggle ships
+`waggle runtime publish-agent --persona <id>` for this. A *running* ACP/LLM process is
+still required for a live conversational turn, but channel roster membership is not
+blocked on Desktop.
 
 **Provisioning is not idempotent.** Creating twice with the same name yields two
 channels. FR-25 requires re-running to produce no duplicates, and NFR-2 requires
@@ -558,7 +560,7 @@ Stories 2.7 and 2.8 shrink substantially and merge into one piece of work:
 | Build a channel-template format and a provisioner | **Emit `channel-templates.json` into each compiled pack** — the template *data* is the deliverable |
 | Build a canvas-template mechanism | **Covered upstream.** Canvases come from `canvas_template` in the same file |
 | Provision channels and add agents | **Thin wrapper** that checks for an existing channel first, then delegates to `buzz channels create --templates-file` |
-| Agent roster membership | **Deferred with Story 1.7** — same live-agent blocker |
+| Agent roster membership | **Headless via kind:30177** (`waggle runtime publish-agent`); live ACP session remains an operator credential residual |
 
 Net: 2.7 and 2.8 become mostly template authoring plus an existence check, not
 mechanism-building. This is the second time Epic 2 has turned out smaller than written

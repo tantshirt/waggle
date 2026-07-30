@@ -1,0 +1,20 @@
+[
+  {
+    "name": "help",
+    "description": "Hub — choose a path or ask BMAD Help what's next. Load bmad-help when mentioned.",
+    "channel_type": "stream",
+    "visibility": "open",
+    "stable_name": true,
+    "include_all_agents": true,
+    "canvas_template": "# BMAD Help\n\n**Waggle — powered by BMAD.** Path chooser and always-on Help live here; the full catalog is filled at compile time from `_bmad/_config/bmad-help.csv`.\n\nAsk any agent `@mention` with your goal, or ask \"what's next?\" — agents load `bmad-help`.\n"
+  },
+  {
+    "name": "party",
+    "description": "Hub — multi-agent roundtable. Load bmad-party-mode.",
+    "channel_type": "stream",
+    "visibility": "open",
+    "stable_name": true,
+    "include_all_agents": true,
+    "canvas_template": "# Party Mode\n\n## Continue\n\n| | |\n|---|---|\n| **Path** | Hub (any path) |\n| **Purpose** | Bring the cast together for a roundtable |\n| **Usually next** | Decisions that need a gate → `#gate`; method routing → `#help` |\n| **Help** | Stuck on process? `@mention` + ask for BMAD Help |\n\nBring the cast together. `@mention` who should speak, or ask the room to deliberate.\n\nLoad `bmad-party-mode` for facilitation rules. Idle agents wake on first @mention (lazy ACP).\n\n## Ground rules\n\n- One conversation, many signed voices\n- Disagreements stay in the log\n- Decisions that need a gate move to `#gate`\n"
+  }
+]

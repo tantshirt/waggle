@@ -1,0 +1,35 @@
+[
+  {
+    "name": "ideation",
+    "description": "Creative path — brainstorming, innovation, design thinking.",
+    "channel_type": "stream",
+    "visibility": "open",
+    "canvas_template": "# Ideation\n\n## Continue\n\n| | |\n|---|---|\n| **Path** | Creative |\n| **Purpose** | Brainstorming, innovation, design thinking |\n| **Usually next** | Move winners to Software `#planning`; roundtable in `#party` |\n| **Help** | `@mention` + ask for BMAD Help anytime |\n\n## Prompt / opportunity\n\n## Divergent notes\n\n## Convergent candidates\n\n| Idea | Why it matters | Next |\n|---|---|---|\n\nMove winners into `#planning`. Use `#party` when the whole cast should weigh in.\n",
+    "agents": {
+      "personas": [
+        {
+          "personaId": "bmad-agent-analyst"
+        },
+        {
+          "personaId": "bmad-cis-agent-brainstorming-coach"
+        },
+        {
+          "personaId": "bmad-cis-agent-creative-problem-solver"
+        },
+        {
+          "personaId": "bmad-cis-agent-design-thinking-coach"
+        },
+        {
+          "personaId": "bmad-cis-agent-innovation-strategist"
+        },
+        {
+          "personaId": "bmad-cis-agent-presentation-master"
+        },
+        {
+          "personaId": "bmad-cis-agent-storyteller"
+        }
+      ],
+      "teams": []
+    }
+  }
+]

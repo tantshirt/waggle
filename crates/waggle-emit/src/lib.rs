@@ -8,6 +8,7 @@
 //! and recorded in `docs/persona-pack-contract.md`.
 
 pub mod channels;
+pub mod help;
 pub mod workflow;
 
 use std::fmt::Write as _;
@@ -62,6 +63,12 @@ pub struct PackMeta<'a> {
     pub channel_templates: Option<&'a [channels::ChannelTemplateSource]>,
     /// Agent ids the module registers, for filling template rosters.
     pub module_agent_ids: &'a [String],
+    /// Every agent the installation registers — for `include_all_agents` (party/help).
+    pub all_agent_ids: &'a [String],
+    /// Optional path to `_bmad/_config/bmad-help.csv` — seeds the `#help` canvas.
+    pub help_csv: Option<&'a Path>,
+    /// Skills always copied into the pack (core help/party), even with no agent menus.
+    pub always_skills: &'a [String],
 }
 
 #[derive(Debug, Clone)]
@@ -69,6 +76,9 @@ pub struct EmitOutcome {
     pub pack_dir: PathBuf,
     pub files_written: Vec<PathBuf>,
     pub skills_copied: Vec<String>,
+    /// Menu skills referenced but not materialized under the tool skills dir.
+    /// Surfaced as warnings — WDS and other modules sometimes disagree on skill ids.
+    pub skills_skipped: Vec<String>,
     /// Channel template names emitted, in order. Empty when the module ships none.
     pub channel_templates: Vec<String>,
 }
@@ -129,7 +139,18 @@ pub fn emit_pack(
     // waggle emits data rather than reimplementing channel and canvas creation.
     let mut channel_templates = Vec::new();
     if let Some(sources) = meta.channel_templates {
-        let store = channels::build_store(meta.module, sources, meta.module_agent_ids);
+        let mut store = channels::build_store(
+            meta.module,
+            sources,
+            meta.module_agent_ids,
+            meta.all_agent_ids,
+        );
+        if let Some(csv_path) = meta.help_csv {
+            let rows = help::load_csv(csv_path);
+            if !rows.is_empty() {
+                help::enrich_help_canvas(&mut store, &rows);
+            }
+        }
         channel_templates = store.iter().map(|t| t.name.clone()).collect();
         let json = channels::render(&store)
             .expect("channel templates are plain data and always serialize");
@@ -150,23 +171,22 @@ pub fn emit_pack(
             }
         }
     }
+    for s in meta.always_skills {
+        if !wanted.contains(s) {
+            wanted.push(s.clone());
+        }
+    }
     wanted.sort();
 
     let mut skills_copied = Vec::new();
+    let mut skills_skipped = Vec::new();
     for skill in wanted {
         let src = meta.skills_source.join(&skill);
         if !src.join("SKILL.md").exists() {
-            let code = packs
-                .iter()
-                .flat_map(|p| p.menu.iter())
-                .find(|m| matches!(m, MenuItem::Dispatch { skill: s, .. } if *s == skill))
-                .map(|m| m.code().to_string())
-                .unwrap_or_default();
-            return Err(EmitError::SkillMissing {
-                skill,
-                code,
-                searched: src,
-            });
+            // AD-6: report and continue — some modules (WDS) reference skill ids that the
+            // installer materializes under a different canonical folder name.
+            skills_skipped.push(skill);
+            continue;
         }
         let dst = pack_dir.join("skills").join(&skill);
         copy_dir(&src, &dst).map_err(|source| EmitError::SkillCopy {
@@ -180,6 +200,7 @@ pub fn emit_pack(
         pack_dir,
         files_written: files,
         skills_copied,
+        skills_skipped,
         channel_templates,
     })
 }
@@ -302,11 +323,31 @@ fn render_persona(pack: &PersonaPack) -> String {
     if !dispatch.is_empty() {
         s.push_str("## Capabilities\n\nLoad a skill with `load(source: \"<skill-name>\")`.\n\n");
         s.push_str("| Code | Capability | Skill |\n|---|---|---|\n");
-        for (code, description, skill) in dispatch {
+        for (code, description, skill) in &dispatch {
             let _ = writeln!(s, "| `{code}` | {description} | `{skill}` |");
         }
         s.push('\n');
     }
+
+    // Bias toward this agent's menu skills + hive help/party (BMAD creator tip:
+    // global skills under ~/.claude/skills + per-agent preference).
+    s.push_str("## Preferred skills\n\n");
+    s.push_str(
+        "Bias toward these skills for your role (also available globally under \
+         `~/.claude/skills` after `waggle sync`). Prefer loading them over improvising:\n\n",
+    );
+    if dispatch.is_empty() {
+        s.push_str("- _(no menu skills registered for this persona)_\n");
+    } else {
+        for (_code, description, skill) in &dispatch {
+            let _ = writeln!(s, "- `{skill}` — {description}");
+        }
+    }
+    s.push_str(
+        "\nHive surfaces (every agent):\n\
+         - `bmad-help` — when mentioned in `#help` or asked what to do next in BMAD\n\
+         - `bmad-party-mode` — when mentioned in `#party` or asked for a roundtable\n\n",
+    );
 
     // AD-7: prompt-only items have no skill, so they live in the body as instructions.
     for item in &pack.menu {
@@ -440,5 +481,14 @@ prompt = "Route the gate."
     fn persistent_facts_render_as_references() {
         let out = render_persona(&sample());
         assert!(out.contains("file:{project-root}/**/x.md"));
+    }
+
+    #[test]
+    fn preferred_skills_bias_includes_menu_and_hive_surfaces() {
+        let out = render_persona(&sample());
+        assert!(out.contains("## Preferred skills"));
+        assert!(out.contains("`s-td`"));
+        assert!(out.contains("`bmad-help`"));
+        assert!(out.contains("`bmad-party-mode`"));
     }
 }

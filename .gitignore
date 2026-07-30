@@ -35,7 +35,12 @@ __pycache__/
 !.vscode/extensions.json
 *.swp
 
-# --- Local scratch ---
+# --- Local scratch / personal overrides (never ship) ---
 /tmp/
 /scratch/
 *.local.yaml
+*.user.toml
+!.env.example
+/_bmad/config.user.toml
+/design-artifacts/
+/_bmad-output/

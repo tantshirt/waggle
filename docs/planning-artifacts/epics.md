@@ -303,21 +303,25 @@ So that the compiler targets verified behavior rather than a spec we have only r
 **Then** it records the authoritative field list, the BMAD-to-pack mapping, the behavioral-config precedence and merge rules, and every field not yet mapped
 **And** any disagreement between the spec and the implementation is logged as an upstream issue.
 
-### Story 1.3: Bring up a hive from a pinned, CI-built image
+### Story 1.3: Bring up a hive from a pinned upstream image
 
 As an operator,
-I want a single compose bundle that starts a hive from an image built by waggle CI from upstream's unmodified Dockerfile,
+I want a single compose bundle that starts a hive from the publicly published Buzz
+relay image, pinned by immutable digest,
 So that I need only a container runtime, not the substrate's full build toolchain.
+
+> **Rescoped 2026-07-29.** UP-08 ("no relay container image") was withdrawn —
+> `ghcr.io/block/buzz` is public. AD-17's "waggle CI builds the image" pipeline is
+> therefore redundant. This story pulls by digest; it does not build.
 
 **Acceptance Criteria:**
 
-**Given** upstream's `Dockerfile` at the pinned tag
-**When** waggle CI builds the relay image
-**Then** no patch, overlay, or edit is applied to upstream sources
-**And** the image provenance records the upstream tag and commit
-**And** the image is published to waggle's registry.
+**Given** the public image at `ghcr.io/block/buzz`
+**When** waggle pins a digest in `deploy/compose/` and `BUZZ_VERSION`
+**Then** the compose bundle references that digest, not a floating tag
+**And** no Dockerfile build step is required of the operator.
 
-**Given** the published image
+**Given** the pinned image
 **When** I run the compose bundle in `deploy/compose/`
 **Then** the relay and its Postgres, Redis, and object-storage services all reach a healthy state
 **And** the bundle references the relay image by immutable digest, not a floating tag.

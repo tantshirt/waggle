@@ -1,0 +1,13 @@
+[
+  {
+    "name": "bmb-workshop",
+    "description": "Builder path — author custom agents, workflows, and modules.",
+    "channel_type": "stream",
+    "visibility": "open",
+    "canvas_template": "# Builder Workshop\n\n## Continue\n\n| | |\n|---|---|\n| **Path** | Builder |\n| **Purpose** | Author custom agents, workflows, and modules |\n| **Usually next** | Validate against BMB standards; `#help` for method routing |\n| **Help** | `@mention` + ask for BMAD Help anytime |\n\n## What we're building\n\n## Checklist\n\n- [ ] Agent / workflow sketched\n- [ ] customize.toml drafted\n- [ ] Validated against BMB standards\n",
+    "agents": {
+      "personas": [],
+      "teams": []
+    }
+  }
+]

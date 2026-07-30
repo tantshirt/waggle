@@ -42,6 +42,23 @@ pub enum IdentityError {
 
     #[error("role names must be lowercase alphanumeric with dashes; got {0:?}")]
     InvalidRole(String),
+
+    #[error(
+        "BUZZ_RELAY_PRIVATE_KEY is not set — buzz-admin needs a stable relay signing key to \
+         publish the membership roster (kind:13534). Generate one with \
+         `openssl rand -hex 32`, set it on the relay and in this shell, then re-run."
+    )]
+    RelayKeyMissing,
+
+    #[error("could not run buzz-admin at {path}: {source}")]
+    AdminUnavailable {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+
+    #[error("buzz-admin failed registering {role:?}: {stderr}")]
+    RegisterFailed { role: String, stderr: String },
 }
 
 /// The public half of one agent identity. Safe to print, log, and serialize.
@@ -286,6 +303,64 @@ pub fn publish_profile(
     }
 
     Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+}
+
+/// Outcome of registering a role with the hive membership list (FR-12).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Registered {
+    /// Newly added to the relay membership list.
+    Added { pubkey: String },
+    /// Already present — idempotent success (FR-12, NFR-2).
+    AlreadyMember { pubkey: String },
+}
+
+/// Register a provisioned identity as a relay member via `buzz-admin add-member`.
+///
+/// **AD-2:** goes through the substrate's published admin CLI. Requires
+/// `DATABASE_URL`, `RELAY_URL`, and `BUZZ_RELAY_PRIVATE_KEY` in the environment
+/// (the last signs the kind:13534 roster event). The agent's secret is never
+/// read — only the public key is passed.
+pub fn register_member(
+    project_root: &Path,
+    role: &str,
+    buzz_admin: &Path,
+    member_role: &str,
+) -> Result<Registered, IdentityError> {
+    validate_role(role)?;
+    let id = load_public(project_root, role)?;
+
+    if std::env::var_os("BUZZ_RELAY_PRIVATE_KEY").is_none() {
+        return Err(IdentityError::RelayKeyMissing);
+    }
+
+    let out = std::process::Command::new(buzz_admin)
+        .args(["add-member", "--pubkey", &id.public_key_hex, "--role", member_role])
+        .output()
+        .map_err(|source| IdentityError::AdminUnavailable {
+            path: buzz_admin.to_path_buf(),
+            source,
+        })?;
+
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let combined = format!("{stdout}{stderr}");
+
+    if !out.status.success() {
+        return Err(IdentityError::RegisterFailed {
+            role: role.to_string(),
+            stderr: combined.trim().to_string(),
+        });
+    }
+
+    if combined.contains("already a member") {
+        Ok(Registered::AlreadyMember {
+            pubkey: id.public_key_hex,
+        })
+    } else {
+        Ok(Registered::Added {
+            pubkey: id.public_key_hex,
+        })
+    }
 }
 
 #[cfg(test)]

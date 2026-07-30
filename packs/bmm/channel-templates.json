@@ -1,10 +1,70 @@
 [
   {
-    "name": "bmm-story",
-    "description": "One story, end to end: spec, handoffs, implementation, and its gate.",
+    "name": "planning",
+    "description": "Software path — analysis, product brief, PRD.",
+    "channel_type": "forum",
+    "visibility": "open",
+    "canvas_template": "# Planning\n\n## Continue\n\n| | |\n|---|---|\n| **Path** | Software |\n| **Purpose** | Analysis, product brief, PRD |\n| **Usually next** | `#architecture` |\n| **Help** | `@mention` + ask for BMAD Help anytime |\n\n## Current phase\n\n_analysis / planning / solutioning / implementation_\n\n## Artifacts\n\n| Artifact | Status | Owner | Event |\n|---|---|---|---|\n| Product brief |  |  |  |\n| PRD |  |  |  |\n| Architecture |  |  |  |\n\n## Open questions\n\nUnknowns recorded here are fine. Unknowns papered over with a guess are not.\n",
+    "agents": {
+      "personas": [
+        {
+          "personaId": "bmad-agent-analyst"
+        },
+        {
+          "personaId": "bmad-agent-pm"
+        },
+        {
+          "personaId": "bmad-agent-tech-writer"
+        }
+      ],
+      "teams": []
+    }
+  },
+  {
+    "name": "architecture",
+    "description": "Software path — architecture and solutioning.",
+    "channel_type": "forum",
+    "visibility": "open",
+    "canvas_template": "# Architecture\n\n## Continue\n\n| | |\n|---|---|\n| **Path** | Software |\n| **Purpose** | Solutioning — trade-offs over verdicts |\n| **Usually next** | `#ux-design` (if UX needed) or `#story` |\n| **Help** | `@mention` + ask for BMAD Help anytime |\n\n## Decisions\n\n| ID | Decision | Status | Rationale |\n|---|---|---|---|\n\n## Constraints\n\n## Open trade-offs\n",
+    "agents": {
+      "personas": [
+        {
+          "personaId": "bmad-agent-architect"
+        },
+        {
+          "personaId": "bmad-agent-dev"
+        },
+        {
+          "personaId": "bmad-agent-pm"
+        }
+      ],
+      "teams": []
+    }
+  },
+  {
+    "name": "ux-design",
+    "description": "Software path — UX and design specs (BMM + WDS when installed).",
+    "channel_type": "forum",
+    "visibility": "open",
+    "canvas_template": "# UX / Design\n\n## Continue\n\n| | |\n|---|---|\n| **Path** | Software |\n| **Purpose** | UX and design-spec canvases |\n| **Usually next** | `#story` |\n| **Help** | `@mention` + ask for BMAD Help anytime |\n\n## Users and jobs\n\n## Flows\n\n## Specs\n\n| Screen / flow | Status | Owner |\n|---|---|---|\n",
+    "agents": {
+      "personas": [
+        {
+          "personaId": "bmad-agent-pm"
+        },
+        {
+          "personaId": "bmad-agent-ux-designer"
+        }
+      ],
+      "teams": []
+    }
+  },
+  {
+    "name": "story",
+    "description": "Software path — one story end to end.",
     "channel_type": "stream",
     "visibility": "open",
-    "canvas_template": "# Story\n\n## Story\n\nAs a _persona_,\nI want _capability_,\nSo that _value_.\n\n## Acceptance criteria\n\n**Given** _precondition_\n**When** _action_\n**Then** _outcome_\n\n## Context\n\nWhich requirements this realizes, and which architecture decisions bind it.\n\n## Handoffs\n\n| From | To | Artifact | When |\n|---|---|---|---|\n\nEach handoff is a signed event in this channel. This table is a reading aid, not the record.\n\n## Definition of done\n\n- [ ] Acceptance criteria met and demonstrated\n- [ ] Tests written and passing\n- [ ] Gate verdict published and approved\n",
+    "canvas_template": "# Story\n\n## Continue\n\n| | |\n|---|---|\n| **Path** | Software |\n| **Purpose** | One story: spec, handoffs, build, its gate |\n| **Usually next** | `#implementation`, then Testing `#test-strategy` |\n| **Help** | `@mention` + ask for BMAD Help anytime |\n\n## Story\n\nAs a _persona_,\nI want _capability_,\nSo that _value_.\n\n## Acceptance criteria\n\n**Given** _precondition_\n**When** _action_\n**Then** _outcome_\n\n## Context\n\nWhich requirements this realizes, and which architecture decisions bind it.\n\n## Handoffs\n\n| From | To | Artifact | When |\n|---|---|---|---|\n\nEach handoff is a signed event in this channel. This table is a reading aid, not the record.\n\n## Definition of done\n\n- [ ] Acceptance criteria met and demonstrated\n- [ ] Tests written and passing\n- [ ] Gate verdict published and approved\n",
     "agents": {
       "personas": [
         {
@@ -30,16 +90,13 @@
     }
   },
   {
-    "name": "bmm-planning",
-    "description": "Analysis, product brief, PRD, and architecture for the current initiative.",
-    "channel_type": "forum",
+    "name": "implementation",
+    "description": "Software path — build the story.",
+    "channel_type": "stream",
     "visibility": "open",
-    "canvas_template": "# Planning\n\n## Current phase\n\n_analysis / planning / solutioning / implementation_\n\n## Artifacts\n\n| Artifact | Status | Owner | Event |\n|---|---|---|---|\n| Product brief |  |  |  |\n| PRD |  |  |  |\n| Architecture |  |  |  |\n\n## Open questions\n\nUnknowns recorded here are fine. Unknowns papered over with a guess are not.\n",
+    "canvas_template": "# Implementation\n\n## Continue\n\n| | |\n|---|---|\n| **Path** | Software |\n| **Purpose** | Build — patches, quick-dev, code review |\n| **Usually next** | Testing `#test-strategy` → `#gate` |\n| **Help** | `@mention` + ask for BMAD Help anytime |\n\n## Current story\n\n## Patches / PRs\n\n| Change | Status | Event |\n|---|---|---|\n\n## Notes\n",
     "agents": {
       "personas": [
-        {
-          "personaId": "bmad-agent-analyst"
-        },
         {
           "personaId": "bmad-agent-architect"
         },
@@ -48,12 +105,6 @@
         },
         {
           "personaId": "bmad-agent-pm"
-        },
-        {
-          "personaId": "bmad-agent-tech-writer"
-        },
-        {
-          "personaId": "bmad-agent-ux-designer"
         }
       ],
       "teams": []

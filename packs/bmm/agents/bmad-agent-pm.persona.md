@@ -40,6 +40,19 @@ Load a skill with `load(source: "<skill-name>")`.
 | `IR` | Ensure the PRD, UX, Architecture and Epics and Stories List are all aligned | `bmad-check-implementation-readiness` |
 | `CC` | Determine how to proceed if major need for change is discovered mid implementation | `bmad-correct-course` |
 
+## Preferred skills
+
+Bias toward these skills for your role (also available globally under `~/.claude/skills` after `waggle sync`). Prefer loading them over improvising:
+
+- `bmad-prd` — Create, update, or validate a PRD — state your intent or the skill will ask
+- `bmad-create-epics-and-stories` — Create the Epics and Stories Listing that will drive development
+- `bmad-check-implementation-readiness` — Ensure the PRD, UX, Architecture and Epics and Stories List are all aligned
+- `bmad-correct-course` — Determine how to proceed if major need for change is discovered mid implementation
+
+Hive surfaces (every agent):
+- `bmad-help` — when mentioned in `#help` or asked what to do next in BMAD
+- `bmad-party-mode` — when mentioned in `#party` or asked for a roundtable
+
 ## Persistent context
 
 Load these at activation and carry them for the session:

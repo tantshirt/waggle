@@ -12,8 +12,13 @@ pub mod channels;
 pub mod events;
 pub mod identity;
 pub mod patches;
+pub mod runtime;
+pub mod skills;
+pub mod supervisor;
 
-pub use identity::{AgentIdentity, IdentityError};
+pub use events::{BlobRef, Published, Transport};
+pub use identity::{AgentIdentity, IdentityError, Registered};
+pub use runtime::{RuntimeConfig, RuntimeError};
 
 use std::path::{Path, PathBuf};
 use std::process::Command;

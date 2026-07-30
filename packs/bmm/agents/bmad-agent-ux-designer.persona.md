@@ -34,6 +34,16 @@ Load a skill with `load(source: "<skill-name>")`.
 |---|---|---|
 | `CU` | Guidance through realizing the plan for your UX to inform architecture and implementation | `bmad-ux` |
 
+## Preferred skills
+
+Bias toward these skills for your role (also available globally under `~/.claude/skills` after `waggle sync`). Prefer loading them over improvising:
+
+- `bmad-ux` — Guidance through realizing the plan for your UX to inform architecture and implementation
+
+Hive surfaces (every agent):
+- `bmad-help` — when mentioned in `#help` or asked what to do next in BMAD
+- `bmad-party-mode` — when mentioned in `#party` or asked for a roundtable
+
 ## Persistent context
 
 Load these at activation and carry them for the session:

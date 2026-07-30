@@ -70,14 +70,22 @@ enum Command {
     #[command(subcommand)]
     Identity(IdentityCmd),
 
+    /// Agent runtime configuration and managed-agent records (FR-13).
+    #[command(subcommand)]
+    Runtime(RuntimeCmd),
+
     /// Compile a method module into a Buzz persona pack.
     ///
     /// Reads the installation (read-only, AD-3), resolves the agent descriptor across all
     /// three override layers (AD-5), and emits a pack. Deterministic (AD-4).
     Compile {
-        /// Module code, e.g. `tea`.
+        /// Module code, e.g. `tea`. Required unless `--all`.
+        #[arg(long, required_unless_present = "all")]
+        module: Option<String>,
+
+        /// Compile every installed module that registers agents or ships channel templates.
         #[arg(long)]
-        module: String,
+        all: bool,
 
         /// Agent id to compile, e.g. `bmad-tea`. Omit to compile every agent the
         /// module registers.
@@ -231,9 +239,13 @@ enum Command {
     /// Delegates creation to the substrate's own template mechanism, adding the
     /// existence check the substrate does not perform (UP-10).
     Provision {
-        /// Module code, e.g. `tea`.
+        /// Module code, e.g. `tea`. Required unless `--all`.
+        #[arg(long, required_unless_present = "all")]
+        module: Option<String>,
+
+        /// Merge every pack's channel templates (phase map) and provision once.
         #[arg(long)]
-        module: String,
+        all: bool,
 
         /// Role whose identity performs the provisioning.
         #[arg(long, default_value = "tea")]
@@ -250,6 +262,61 @@ enum Command {
         /// Path to the substrate CLI.
         #[arg(long)]
         buzz_cli: Option<PathBuf>,
+
+        /// Human Desktop pubkey (hex) to add to every phase channel.
+        /// Defaults to `WAGGLE_HUMAN_PUBKEY` or `BUZZ_ACP_AGENT_OWNER`.
+        #[arg(long, env = "WAGGLE_HUMAN_PUBKEY")]
+        human_pubkey: Option<String>,
+
+        /// Rewrite description + canvas on channels that already exist (template UX updates).
+        #[arg(long)]
+        refresh: bool,
+    },
+
+    /// Bring the method installation in line with BUZZ_VERSION and regenerate packs.
+    ///
+    /// Runs the BMAD installer (non-interactive), compiles all modules, provisions
+    /// identities/profiles/managed-agents, and merges the hive phase channel map.
+    Sync {
+        /// Override BMAD_METHOD_VERSION from BUZZ_VERSION.
+        #[arg(long)]
+        bmad_version: Option<String>,
+
+        /// Comma-separated module codes for the installer. Default: discover / full set.
+        #[arg(long)]
+        modules: Option<String>,
+
+        /// Skip the BMAD installer; only recompile and provision from the current `_bmad/`.
+        #[arg(long)]
+        skip_install: bool,
+
+        /// Allow versions outside BMAD_SUPPORTED.
+        #[arg(long)]
+        allow_unsupported: bool,
+
+        /// Relay base URL for identity/channel provisioning.
+        #[arg(long, default_value = "http://localhost:3100")]
+        relay: String,
+
+        /// Do not call the relay (compile + identity files only).
+        #[arg(long)]
+        offline: bool,
+
+        /// Path to the substrate CLI.
+        #[arg(long)]
+        buzz_cli: Option<PathBuf>,
+
+        /// Human Desktop pubkey (hex) to add to every phase channel.
+        #[arg(long, env = "WAGGLE_HUMAN_PUBKEY")]
+        human_pubkey: Option<String>,
+
+        /// Do not symlink BMAD skills into ~/.claude/skills (or $CLAUDE_SKILLS_HOME).
+        #[arg(long)]
+        skip_global_skills: bool,
+
+        /// Rewrite description + canvas on channels that already exist.
+        #[arg(long)]
+        refresh: bool,
     },
 }
 
@@ -293,6 +360,98 @@ enum IdentityCmd {
         /// Path to the substrate CLI. Defaults to the vendored release build.
         #[arg(long)]
         buzz_cli: Option<PathBuf>,
+    },
+
+    /// Register a provisioned identity on the relay membership list (FR-12).
+    ///
+    /// Requires `DATABASE_URL`, `RELAY_URL`, and `BUZZ_RELAY_PRIVATE_KEY` in the
+    /// environment. Idempotent: already-a-member is success.
+    Register {
+        /// Role to register.
+        #[arg(long)]
+        role: String,
+
+        /// Membership role: `member` or `admin`.
+        #[arg(long, default_value = "member")]
+        member_role: String,
+
+        /// Path to `buzz-admin`. Defaults to the vendored release build.
+        #[arg(long)]
+        buzz_admin: Option<PathBuf>,
+    },
+}
+
+#[derive(Subcommand)]
+enum RuntimeCmd {
+    /// Emit agent runtime configuration for a role (FR-13).
+    ///
+    /// Writes `keys/runtime/<role>.json`. Does not start a session — that needs
+    /// an ACP runtime and LLM credentials (see the config's `required_env`).
+    Emit {
+        #[arg(long)]
+        role: String,
+
+        /// Compiled pack directory, e.g. `packs/tea`.
+        #[arg(long)]
+        pack: PathBuf,
+
+        /// Persona id inside the pack, e.g. `bmad-tea`.
+        #[arg(long)]
+        persona: String,
+
+        #[arg(long, default_value = "http://localhost:3100")]
+        relay: String,
+
+        /// Session concurrency ceiling (NFR-8).
+        #[arg(long, default_value_t = waggle_hive::runtime::DEFAULT_MAX_SESSIONS)]
+        max_sessions: u32,
+    },
+
+    /// Publish a kind:30177 managed-agent record for the role (headless).
+    PublishAgent {
+        #[arg(long)]
+        role: String,
+
+        #[arg(long)]
+        pack: PathBuf,
+
+        /// Persona id inside the pack — required so multi-agent packs cannot
+        /// silently pick the wrong display name from an unordered directory listing.
+        #[arg(long)]
+        persona: String,
+
+        #[arg(long, default_value = "http://localhost:3100")]
+        relay: String,
+
+        #[arg(long, default_value_t = waggle_hive::runtime::DEFAULT_MAX_SESSIONS)]
+        max_sessions: u32,
+    },
+
+    /// Lazy-spawn buzz-acp when an offline agent is @mentioned (hive mirror).
+    Supervisor {
+        #[arg(long, default_value = "ws://localhost:3100")]
+        relay: String,
+
+        /// Path to buzz-acp. Defaults to the vendored debug build.
+        #[arg(long)]
+        buzz_acp: Option<PathBuf>,
+
+        #[arg(long, default_value = "claude-agent-acp")]
+        agent_command: String,
+
+        /// Human owner pubkey (hex) — Desktop identity. Required for OwnerOnly agents.
+        #[arg(long, env = "BUZZ_ACP_AGENT_OWNER")]
+        agent_owner: Option<String>,
+
+        #[arg(long, default_value_t = waggle_hive::supervisor::DEFAULT_MAX_CONCURRENT)]
+        max_concurrent: usize,
+
+        #[arg(long, default_value = "anyone")]
+        respond_to: String,
+
+        /// Idle seconds before buzz-acp exits (`BUZZ_ACP_IDLE_TIMEOUT`).
+        #[arg(long, default_value_t = waggle_hive::supervisor::DEFAULT_IDLE_TIMEOUT_SECS)]
+        idle_timeout: u64,
     },
 }
 
@@ -378,13 +537,23 @@ fn main() -> ExitCode {
             run_preflight(&root, &substrate_path, allow_unsupported, cli.format)
         }
         Command::Identity(ref cmd) => run_identity(&root, cmd, cli.format),
+        Command::Runtime(ref cmd) => run_runtime(&root, cmd, cli.format),
         Command::Compile {
             ref module,
+            all,
             ref agent,
             ref out,
         } => {
             let out_dir = out.clone().unwrap_or_else(|| root.join("packs"));
-            run_compile(&root, module, agent.as_deref(), &out_dir, cli.format)
+            if all {
+                run_compile_all(&root, &out_dir, cli.format)
+            } else {
+                let Some(module) = module.as_deref() else {
+                    eprintln!("error: --module is required unless --all");
+                    return ExitCode::from(exit::USER);
+                };
+                run_compile(&root, module, agent.as_deref(), &out_dir, cli.format)
+            }
         }
         Command::Modules => run_modules(&root, cli.format),
         Command::Gate {
@@ -460,18 +629,90 @@ fn main() -> ExitCode {
         } => run_trail(&root, role, channel, priority.as_deref(), relay, cli.format),
         Command::Provision {
             ref module,
+            all,
             ref role,
             ref pack,
             ref relay,
             ref buzz_cli,
+            ref human_pubkey,
+            refresh,
         } => {
-            let pack_dir = pack
-                .clone()
-                .unwrap_or_else(|| root.join("packs").join(module));
-            let cli_path = buzz_cli
-                .clone()
-                .unwrap_or_else(|| root.join("vendor/buzz/target/release/buzz"));
-            run_provision(&root, module, role, &pack_dir, relay, &cli_path, cli.format)
+            let cli_path = buzz_cli.clone().unwrap_or_else(|| {
+                let debug = root.join("vendor/buzz/target/debug/buzz");
+                let release = root.join("vendor/buzz/target/release/buzz");
+                if debug.exists() {
+                    debug
+                } else {
+                    release
+                }
+            });
+            let human = resolve_human_pubkey(human_pubkey.as_deref());
+            if all {
+                run_provision_all(
+                    &root,
+                    role,
+                    relay,
+                    &cli_path,
+                    human.as_deref(),
+                    refresh,
+                    cli.format,
+                )
+            } else {
+                let Some(module) = module.as_deref() else {
+                    eprintln!("error: --module is required unless --all");
+                    return ExitCode::from(exit::USER);
+                };
+                let pack_dir = pack
+                    .clone()
+                    .unwrap_or_else(|| root.join("packs").join(module));
+                run_provision(
+                    &root,
+                    module,
+                    role,
+                    &pack_dir,
+                    relay,
+                    &cli_path,
+                    human.as_deref(),
+                    refresh,
+                    cli.format,
+                )
+            }
+        }
+        Command::Sync {
+            ref bmad_version,
+            ref modules,
+            skip_install,
+            allow_unsupported,
+            ref relay,
+            offline,
+            ref buzz_cli,
+            ref human_pubkey,
+            skip_global_skills,
+            refresh,
+        } => {
+            let cli_path = buzz_cli.clone().unwrap_or_else(|| {
+                let debug = root.join("vendor/buzz/target/debug/buzz");
+                let release = root.join("vendor/buzz/target/release/buzz");
+                if debug.exists() {
+                    debug
+                } else {
+                    release
+                }
+            });
+            run_sync(
+                &root,
+                bmad_version.as_deref(),
+                modules.as_deref(),
+                skip_install,
+                allow_unsupported,
+                relay,
+                offline,
+                &cli_path,
+                resolve_human_pubkey(human_pubkey.as_deref()).as_deref(),
+                skip_global_skills,
+                refresh,
+                cli.format,
+            )
         }
     }
 }
@@ -492,6 +733,388 @@ struct ProvisionReport {
     channels: Vec<ProvisionedChannel>,
 }
 
+/// Map a BMAD agent id to a short waggle identity role.
+fn role_for_agent(agent_id: &str) -> String {
+    if agent_id == "bmad-tea" {
+        return "tea".into();
+    }
+    if let Some(rest) = agent_id.strip_prefix("bmad-agent-") {
+        return rest.to_string();
+    }
+    if let Some(rest) = agent_id.strip_prefix("bmad-cis-agent-") {
+        return format!("cis-{rest}");
+    }
+    if let Some(rest) = agent_id.strip_prefix("gds-agent-") {
+        return format!("gds-{rest}");
+    }
+    if let Some(rest) = agent_id.strip_prefix("wds-agent-") {
+        return format!("wds-{rest}");
+    }
+    if let Some(rest) = agent_id.strip_prefix("bmad-") {
+        return rest.to_string();
+    }
+    agent_id.to_string()
+}
+
+/// Modules that register agents or ship `templates/<module>/channels.json`.
+fn modules_to_compile(root: &std::path::Path) -> Vec<String> {
+    let mut mods = Vec::new();
+    if let Ok(registry) = waggle_method::registry::read(root) {
+        mods.extend(waggle_method::registry::modules(&registry));
+    }
+    let templates = root.join("templates");
+    if let Ok(rd) = std::fs::read_dir(&templates) {
+        for entry in rd.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if entry.path().join("channels.json").is_file() && !mods.contains(&name) {
+                mods.push(name);
+            }
+        }
+    }
+    mods.sort();
+    mods.dedup();
+    mods
+}
+
+fn run_compile_all(root: &std::path::Path, out_dir: &std::path::Path, format: Format) -> ExitCode {
+    let mods = modules_to_compile(root);
+    if mods.is_empty() {
+        eprintln!("error: no modules to compile — is BMAD installed?");
+        return ExitCode::from(exit::USER);
+    }
+    let mut failed = false;
+    for m in &mods {
+        match format {
+            Format::Text => println!("--- compile {m} ---"),
+            Format::Json => {}
+        }
+        let code = run_compile(root, m, None, out_dir, format);
+        if code != ExitCode::from(exit::OK) {
+            failed = true;
+        }
+    }
+    // Merge hive phase store for provision --all.
+    if let Err(e) = write_hive_channel_store(root, out_dir) {
+        eprintln!("error: hive channel merge: {e}");
+        return ExitCode::from(exit::SYSTEM);
+    }
+    if failed {
+        ExitCode::from(exit::UPSTREAM)
+    } else {
+        match format {
+            Format::Text => println!("compiled {} modules -> {}", mods.len(), out_dir.display()),
+            Format::Json => emit(
+                format,
+                "compile.all",
+                true,
+                &serde_json::json!({ "modules": mods }),
+            ),
+        }
+        ExitCode::from(exit::OK)
+    }
+}
+
+fn write_hive_channel_store(
+    root: &std::path::Path,
+    out_dir: &std::path::Path,
+) -> Result<(), String> {
+    let mut stores = Vec::new();
+    let packs = out_dir;
+    if let Ok(rd) = std::fs::read_dir(packs) {
+        for entry in rd.flatten() {
+            // Skip the merged hive output itself — re-including it overwrites
+            // freshly enriched canvases (e.g. #help from bmad-help.csv) with a
+            // stale shorter copy from the previous merge.
+            if entry.file_name() == "hive" {
+                continue;
+            }
+            let path = entry.path().join("channel-templates.json");
+            if !path.is_file() {
+                continue;
+            }
+            let raw = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+            let store: Vec<waggle_emit::channels::ChannelTemplateRecord> =
+                serde_json::from_str(&raw).map_err(|e| format!("{}: {e}", path.display()))?;
+            stores.push(store);
+        }
+    }
+    let merged = waggle_emit::channels::merge_stores(&stores);
+    let hive = out_dir.join("hive");
+    std::fs::create_dir_all(&hive).map_err(|e| e.to_string())?;
+    let json = waggle_emit::channels::render(&merged).map_err(|e| e.to_string())?;
+    std::fs::write(hive.join("channel-templates.json"), json).map_err(|e| e.to_string())?;
+    let _ = root; // reserved for future sync-state path
+    Ok(())
+}
+
+fn resolve_human_pubkey(explicit: Option<&str>) -> Option<String> {
+    explicit
+        .map(str::to_string)
+        .or_else(|| std::env::var("WAGGLE_HUMAN_PUBKEY").ok())
+        .or_else(|| std::env::var("BUZZ_ACP_AGENT_OWNER").ok())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+fn roster_pubkeys(root: &std::path::Path, human: Option<&str>) -> Vec<String> {
+    let mut keys = Vec::new();
+    if let Some(h) = human {
+        keys.push(h.to_ascii_lowercase());
+    }
+    let runtime = root.join("keys").join("runtime");
+    if let Ok(rd) = std::fs::read_dir(&runtime) {
+        for entry in rd.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("json") {
+                continue;
+            }
+            let Ok(raw) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            let Ok(v) = serde_json::from_str::<serde_json::Value>(&raw) else {
+                continue;
+            };
+            if let Some(pk) = v.get("public_key_hex").and_then(|x| x.as_str()) {
+                let pk = pk.to_ascii_lowercase();
+                if !keys.contains(&pk) {
+                    keys.push(pk);
+                }
+            }
+        }
+    }
+    keys.sort();
+    keys.dedup();
+    keys
+}
+
+fn run_provision_all(
+    root: &std::path::Path,
+    role: &str,
+    relay: &str,
+    buzz_cli: &std::path::Path,
+    human_pubkey: Option<&str>,
+    refresh: bool,
+    format: Format,
+) -> ExitCode {
+    let out_dir = root.join("packs");
+    if let Err(e) = write_hive_channel_store(root, &out_dir) {
+        eprintln!("error: {e}");
+        return ExitCode::from(exit::SYSTEM);
+    }
+    run_provision(
+        root,
+        "hive",
+        role,
+        &out_dir.join("hive"),
+        relay,
+        buzz_cli,
+        human_pubkey,
+        refresh,
+        format,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_sync(
+    root: &std::path::Path,
+    bmad_version: Option<&str>,
+    modules: Option<&str>,
+    skip_install: bool,
+    allow_unsupported: bool,
+    relay: &str,
+    offline: bool,
+    buzz_cli: &std::path::Path,
+    human_pubkey: Option<&str>,
+    skip_global_skills: bool,
+    refresh: bool,
+    format: Format,
+) -> ExitCode {
+    let pins_raw = match std::fs::read_to_string(root.join("BUZZ_VERSION")) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("error: cannot read BUZZ_VERSION: {e}");
+            return ExitCode::from(exit::SYSTEM);
+        }
+    };
+    let pins = waggle_core::pins::parse_pins(&pins_raw);
+    let version = bmad_version
+        .or_else(|| pins.get("BMAD_METHOD_VERSION").map(String::as_str))
+        .unwrap_or("6.10.0");
+    let module_list = modules
+        .or_else(|| pins.get("BMAD_MODULES").map(String::as_str))
+        .unwrap_or("bmm,bmb,tea,cis,gds,wds");
+
+    if let Some(range) = waggle_core::pins::range(&pins, "BMAD_SUPPORTED") {
+        if let Some(v) = waggle_core::Version::parse(version) {
+            if !range.check(v).is_supported() && !allow_unsupported {
+                eprintln!(
+                    "error: BMAD {version} is outside BMAD_SUPPORTED ({range}). \
+                     Pass --allow-unsupported to override."
+                );
+                return ExitCode::from(exit::USER);
+            }
+        }
+    }
+
+    if !skip_install {
+        println!("sync: installing bmad-method@{version} modules={module_list}");
+        // `--action update` adds newly requested modules; `--yes` alone defaults to
+        // quick-update which only refreshes modules already present.
+        let status = std::process::Command::new("npx")
+            .args([
+                "--yes",
+                &format!("bmad-method@{version}"),
+                "install",
+                "--directory",
+                &root.display().to_string(),
+                "--modules",
+                module_list,
+                "--tools",
+                "claude-code",
+                "--all-stable",
+                "--action",
+                "update",
+                "--yes",
+            ])
+            .current_dir(root)
+            .status();
+        match status {
+            Ok(s) if s.success() => {}
+            Ok(s) => {
+                eprintln!("error: bmad-method install exited {s}");
+                return ExitCode::from(exit::UPSTREAM);
+            }
+            Err(e) => {
+                eprintln!("error: could not run npx bmad-method: {e}");
+                return ExitCode::from(exit::SYSTEM);
+            }
+        }
+    }
+
+    let out_dir = root.join("packs");
+    let compile_code = run_compile_all(root, &out_dir, format);
+    if compile_code != ExitCode::from(exit::OK) {
+        return compile_code;
+    }
+
+    if !skip_global_skills {
+        let project_skills = root.join(".claude").join("skills");
+        let target = waggle_hive::skills::global_skills_home();
+        match waggle_hive::skills::publish_global(&project_skills, &target) {
+            Ok(report) => {
+                if matches!(format, Format::Text) {
+                    println!(
+                        "global skills {} linked, {} skipped, {} removed → {}",
+                        report.linked.len(),
+                        report.skipped.len(),
+                        report.removed.len(),
+                        report.target_dir.display()
+                    );
+                    for (name, reason) in report.skipped.iter().take(5) {
+                        println!("  skip {name}: {reason}");
+                    }
+                }
+            }
+            Err(e) => {
+                eprintln!("warning: global skills publish: {e}");
+            }
+        }
+    }
+
+    let registry = match waggle_method::registry::read(root) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("error: {e}");
+            return ExitCode::from(exit::UPSTREAM);
+        }
+    };
+
+    // Identities + runtime configs for every registered agent.
+    for (agent_id, agent) in &registry {
+        let role = role_for_agent(agent_id);
+        match waggle_hive::identity::provision(root, &role, false) {
+            Ok(_) | Err(waggle_hive::IdentityError::AlreadyExists { .. }) => {}
+            Err(e) => {
+                eprintln!("warning: identity {role}: {e}");
+                continue;
+            }
+        }
+        let pack = root.join("packs").join(&agent.module);
+        let _ = waggle_hive::runtime::emit_config(
+            root,
+            &role,
+            &pack,
+            agent_id,
+            relay,
+            waggle_hive::runtime::DEFAULT_MAX_SESSIONS,
+        );
+        if !offline {
+            let admin = root.join("vendor/buzz/target/debug/buzz-admin");
+            let admin = if admin.exists() {
+                admin
+            } else {
+                root.join("vendor/buzz/target/release/buzz-admin")
+            };
+            let _ = waggle_hive::identity::register_member(root, &role, &admin, "member");
+            if let Ok((display_name, description)) = read_pack_persona_named(&pack, agent_id) {
+                let _ = waggle_hive::runtime::publish_managed_agent(
+                    root,
+                    &role,
+                    relay,
+                    &display_name,
+                    &description,
+                    agent_id,
+                    waggle_hive::runtime::DEFAULT_MAX_SESSIONS,
+                    &uuid_like(),
+                );
+                let secret_path = root.join("keys").join(format!("{role}.nsec"));
+                if let Ok(secret) = std::fs::read_to_string(&secret_path) {
+                    let _ = std::process::Command::new(buzz_cli)
+                        .env("BUZZ_PRIVATE_KEY", secret.trim())
+                        .env("BUZZ_RELAY_URL", relay)
+                        .args([
+                            "users",
+                            "set-profile",
+                            "--name",
+                            &display_name,
+                            "--about",
+                            &description,
+                        ])
+                        .status();
+                }
+            }
+        }
+    }
+
+    if !offline {
+        let _ = run_provision_all(root, "tea", relay, buzz_cli, human_pubkey, refresh, format);
+    }
+
+    // Persist sync snapshot for CI diffs.
+    let state = serde_json::json!({
+        "bmad_method_version": version,
+        "modules_requested": module_list,
+        "synced_at_unix": std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0),
+    });
+    let custom = root.join("_bmad").join("custom");
+    let _ = std::fs::create_dir_all(&custom);
+    let _ = std::fs::write(
+        custom.join("waggle-sync-state.json"),
+        serde_json::to_string_pretty(&state).unwrap_or_default() + "\n",
+    );
+
+    match format {
+        Format::Text => {
+            println!("sync complete — restart: waggle runtime supervisor");
+        }
+        Format::Json => emit(format, "sync", true, &state),
+    }
+    ExitCode::from(exit::OK)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn run_provision(
     root: &std::path::Path,
@@ -500,6 +1123,8 @@ fn run_provision(
     pack_dir: &std::path::Path,
     relay: &str,
     buzz_cli: &std::path::Path,
+    human_pubkey: Option<&str>,
+    refresh: bool,
     format: Format,
 ) -> ExitCode {
     let templates_file = pack_dir.join("channel-templates.json");
@@ -544,13 +1169,21 @@ fn run_provision(
         }
     };
 
+    let members = roster_pubkeys(root, human_pubkey);
+    if human_pubkey.is_none() {
+        eprintln!(
+            "warning: no --human-pubkey / WAGGLE_HUMAN_PUBKEY / BUZZ_ACP_AGENT_OWNER — \
+             Desktop may not see phase channels until you are added as a member"
+        );
+    }
+
     let mut out = Vec::new();
     for t in &store {
         let Some(template_name) = t.get("name").and_then(|v| v.as_str()) else {
             continue;
         };
         // The channel takes the template's name; the template is already module-prefixed.
-        match waggle_hive::channels::provision_channel(
+        let (outcome, id, canvas_applied) = match waggle_hive::channels::provision_channel(
             buzz_cli,
             relay,
             &secret,
@@ -560,28 +1193,60 @@ fn run_provision(
             &existing,
         ) {
             Ok(waggle_hive::channels::Provisioned::Created { id, canvas_applied }) => {
-                out.push(ProvisionedChannel {
-                    template: template_name.to_string(),
-                    channel: template_name.to_string(),
-                    outcome: "created",
-                    id,
-                    canvas_applied,
-                });
+                ("created", id, canvas_applied)
+            }
+            Ok(waggle_hive::channels::Provisioned::AlreadyExists { id }) if refresh => {
+                let desc = t.get("description").and_then(|v| v.as_str());
+                let canvas = t.get("canvas_template").and_then(|v| v.as_str());
+                match waggle_hive::channels::refresh_channel(
+                    buzz_cli,
+                    relay,
+                    &secret,
+                    &id,
+                    desc,
+                    canvas,
+                ) {
+                    Ok(r) => ("refreshed", id, r.canvas_applied),
+                    Err(e) => {
+                        eprintln!("error: refresh {template_name}: {e}");
+                        return ExitCode::from(exit::UPSTREAM);
+                    }
+                }
             }
             Ok(waggle_hive::channels::Provisioned::AlreadyExists { id }) => {
-                out.push(ProvisionedChannel {
-                    template: template_name.to_string(),
-                    channel: template_name.to_string(),
-                    outcome: "already-exists",
-                    id,
-                    canvas_applied: false,
-                });
+                ("already-exists", id, false)
             }
+            Ok(waggle_hive::channels::Provisioned::Refreshed {
+                id,
+                canvas_applied,
+                ..
+            }) => ("refreshed", id, canvas_applied),
             Err(e) => {
                 eprintln!("error: {e}");
                 return ExitCode::from(exit::UPSTREAM);
             }
+        };
+
+        if !members.is_empty() {
+            let failed = waggle_hive::channels::ensure_members(
+                buzz_cli,
+                relay,
+                &secret,
+                &id,
+                &members,
+            );
+            for (pk, err) in failed.into_iter().take(3) {
+                eprintln!("warning: add-member {}… on {template_name}: {err}", &pk[..12.min(pk.len())]);
+            }
         }
+
+        out.push(ProvisionedChannel {
+            template: template_name.to_string(),
+            channel: template_name.to_string(),
+            outcome,
+            id,
+            canvas_applied,
+        });
     }
 
     let report = ProvisionReport {
@@ -595,6 +1260,12 @@ fn run_provision(
             for c in &report.channels {
                 let canvas = if c.canvas_applied { " +canvas" } else { "" };
                 println!("{:<14} {}{}", c.outcome, c.channel, canvas);
+            }
+            if !members.is_empty() {
+                println!(
+                    "roster        {} pubkey(s) ensured on each channel",
+                    members.len()
+                );
             }
         }
     }
@@ -858,6 +1529,11 @@ struct PublishReport {
     event_id: String,
     pubkey: String,
     marker: String,
+    transport: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    sha256: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    blob_url: Option<String>,
     tags: Vec<Vec<String>>,
 }
 
@@ -932,10 +1608,21 @@ fn run_publish(
 
     match waggle_hive::events::publish_artifact(root, role, relay, &artifact, &nonce) {
         Ok(p) => {
+            let (transport, sha256, blob_url) = match &p.transport {
+                waggle_hive::Transport::Inline => ("inline".to_string(), None, None),
+                waggle_hive::Transport::Reference {
+                    sha256,
+                    url,
+                    bytes: _,
+                } => ("reference".to_string(), Some(sha256.clone()), Some(url.clone())),
+            };
             let report = PublishReport {
                 event_id: p.event_id,
                 pubkey: p.pubkey,
                 marker: marker.to_string(),
+                transport,
+                sha256,
+                blob_url,
                 tags: artifact.tags(),
             };
             match format {
@@ -943,6 +1630,11 @@ fn run_publish(
                 Format::Text => {
                     println!("published {} {}", report.marker, report.event_id);
                     println!("  signed by {}", report.pubkey);
+                    println!("  transport {}", report.transport);
+                    if let (Some(h), Some(u)) = (&report.sha256, &report.blob_url) {
+                        println!("  sha256    {h}");
+                        println!("  blob      {u}");
+                    }
                 }
             }
             ExitCode::from(exit::OK)
@@ -1167,6 +1859,7 @@ struct CompileOutput {
     pack_dir: String,
     files_written: Vec<String>,
     skills_copied: Vec<String>,
+    skills_skipped: Vec<String>,
     channel_templates: Vec<String>,
     reports: Vec<waggle_core::CompileReport>,
     /// Kind-policy findings across every emitted artifact (FR-6, AD-8).
@@ -1210,9 +1903,28 @@ fn run_compile(
         None => waggle_method::registry::agents_for_module(&registry, module),
     };
 
-    if agent_ids.is_empty() {
+    // waggle's own template data, if the module ships any (AD-16: data, not code).
+    let templates_path = root.join("templates").join(module).join("channels.json");
+    let channel_sources: Option<Vec<waggle_emit::channels::ChannelTemplateSource>> =
+        if templates_path.exists() {
+            match std::fs::read_to_string(&templates_path)
+                .map_err(|e| e.to_string())
+                .and_then(|raw| serde_json::from_str(&raw).map_err(|e| e.to_string()))
+            {
+                Ok(v) => Some(v),
+                Err(e) => {
+                    eprintln!("error: {}: {e}", templates_path.display());
+                    return ExitCode::from(exit::USER);
+                }
+            }
+        } else {
+            None
+        };
+
+    if agent_ids.is_empty() && channel_sources.is_none() {
         eprintln!(
-            "error: module {module:?} registers no agents. Known modules: {}",
+            "error: module {module:?} registers no agents and ships no channel templates. \
+             Known agent modules: {}",
             waggle_method::registry::modules(&registry).join(", ")
         );
         return ExitCode::from(exit::USER);
@@ -1224,8 +1936,12 @@ fn run_compile(
         .find(|m| m.name == module)
         .map(|m| m.version_raw.clone())
         .unwrap_or_else(|| {
-            eprintln!("warning: module {module:?} is not in the installation manifest");
-            "0.0.0".to_string()
+            if channel_sources.is_some() {
+                "0.0.0".to_string()
+            } else {
+                eprintln!("warning: module {module:?} is not in the installation manifest");
+                "0.0.0".to_string()
+            }
         });
 
     let mut packs = Vec::new();
@@ -1259,27 +1975,20 @@ fn run_compile(
         }
     }
 
-    // waggle's own template data, if the module ships any (AD-16: data, not code).
-    let templates_path = root.join("templates").join(module).join("channels.json");
-    let channel_sources: Option<Vec<waggle_emit::channels::ChannelTemplateSource>> =
-        if templates_path.exists() {
-            match std::fs::read_to_string(&templates_path)
-                .map_err(|e| e.to_string())
-                .and_then(|raw| serde_json::from_str(&raw).map_err(|e| e.to_string()))
-            {
-                Ok(v) => Some(v),
-                Err(e) => {
-                    eprintln!("error: {}: {e}", templates_path.display());
-                    return ExitCode::from(exit::USER);
-                }
-            }
-        } else {
-            None
-        };
-
     let all_module_agents = waggle_method::registry::agents_for_module(&registry, module);
+    let all_agent_ids: Vec<String> = registry.keys().cloned().collect();
 
     let instructions = include_str!("../assets/instructions.md");
+    let help_csv_path = root.join("_bmad/_config/bmad-help.csv");
+    // Core surfaces only — keep agent packs menu-faithful (verify-compile counts skills).
+    let always_skills: Vec<String> = if module == "core" {
+        vec![
+            "bmad-help".to_string(),
+            "bmad-party-mode".to_string(),
+        ]
+    } else {
+        Vec::new()
+    };
     let meta = waggle_emit::PackMeta {
         module,
         module_version: &module_version,
@@ -1287,6 +1996,9 @@ fn run_compile(
         instructions,
         channel_templates: channel_sources.as_deref(),
         module_agent_ids: &all_module_agents,
+        all_agent_ids: &all_agent_ids,
+        help_csv: help_csv_path.exists().then_some(help_csv_path.as_path()),
+        always_skills: &always_skills,
     };
 
     let outcome = match waggle_emit::emit_pack(out_dir, &packs, &meta) {
@@ -1323,6 +2035,7 @@ fn run_compile(
             .map(|p| p.display().to_string())
             .collect(),
         skills_copied: outcome.skills_copied,
+        skills_skipped: outcome.skills_skipped,
         channel_templates: outcome.channel_templates,
         reports,
         lint: findings,
@@ -1338,6 +2051,12 @@ fn run_compile(
                 output.pack_dir
             );
             println!("  skills       {} copied", output.skills_copied.len());
+            if !output.skills_skipped.is_empty() {
+                println!(
+                    "  skills skip  {} (not on disk under tool skills dir)",
+                    output.skills_skipped.join(", ")
+                );
+            }
             if output.channel_templates.is_empty() {
                 println!("  channels     none (module ships no templates/{module}/channels.json)");
             } else {
@@ -1517,7 +2236,202 @@ fn run_identity(root: &std::path::Path, cmd: &IdentityCmd, format: Format) -> Ex
                 }
             }
         }
+        IdentityCmd::Register {
+            role,
+            member_role,
+            buzz_admin,
+        } => {
+            let admin = buzz_admin
+                .clone()
+                .unwrap_or_else(|| root.join("vendor/buzz/target/release/buzz-admin"));
+            match waggle_hive::identity::register_member(root, role, &admin, member_role) {
+                Ok(waggle_hive::Registered::Added { pubkey }) => {
+                    match format {
+                        Format::Json => emit(
+                            format,
+                            "identity.register",
+                            true,
+                            &serde_json::json!({
+                                "role": role,
+                                "pubkey": pubkey,
+                                "status": "added",
+                                "member_role": member_role,
+                            }),
+                        ),
+                        Format::Text => {
+                            println!("registered {role} ({pubkey}) as {member_role}");
+                        }
+                    }
+                    ExitCode::from(exit::OK)
+                }
+                Ok(waggle_hive::Registered::AlreadyMember { pubkey }) => {
+                    match format {
+                        Format::Json => emit(
+                            format,
+                            "identity.register",
+                            true,
+                            &serde_json::json!({
+                                "role": role,
+                                "pubkey": pubkey,
+                                "status": "already-member",
+                                "member_role": member_role,
+                            }),
+                        ),
+                        Format::Text => {
+                            println!("already a member: {role} ({pubkey})");
+                        }
+                    }
+                    ExitCode::from(exit::OK)
+                }
+                Err(e) => {
+                    eprintln!("error: {e}");
+                    ExitCode::from(match e {
+                        waggle_hive::IdentityError::RelayKeyMissing
+                        | waggle_hive::IdentityError::NotProvisioned { .. } => exit::USER,
+                        _ => exit::UPSTREAM,
+                    })
+                }
+            }
+        }
     }
+}
+
+fn run_runtime(root: &std::path::Path, cmd: &RuntimeCmd, format: Format) -> ExitCode {
+    match cmd {
+        RuntimeCmd::Emit {
+            role,
+            pack,
+            persona,
+            relay,
+            max_sessions,
+        } => match waggle_hive::runtime::emit_config(
+            root,
+            role,
+            pack,
+            persona,
+            relay,
+            *max_sessions,
+        ) {
+            Ok((cfg, path)) => {
+                match format {
+                    Format::Json => emit(format, "runtime.emit", true, &cfg),
+                    Format::Text => {
+                        println!("wrote {}", path.display());
+                        println!("role          {}", cfg.role);
+                        println!("npub          {}", cfg.npub);
+                        println!("pack          {}", cfg.pack_dir);
+                        println!("max_sessions  {}", cfg.max_sessions);
+                        println!("live turn needs: {}", cfg.required_env.join(", "));
+                    }
+                }
+                ExitCode::from(exit::OK)
+            }
+            Err(e) => {
+                eprintln!("error: {e}");
+                ExitCode::from(exit::USER)
+            }
+        },
+        RuntimeCmd::PublishAgent {
+            role,
+            pack,
+            persona,
+            relay,
+            max_sessions,
+        } => {
+            let (display_name, description) = match read_pack_persona_named(pack, persona) {
+                Ok(p) => p,
+                Err(e) => {
+                    eprintln!("error: {e}");
+                    return ExitCode::from(exit::USER);
+                }
+            };
+            match waggle_hive::runtime::publish_managed_agent(
+                root,
+                role,
+                relay,
+                &display_name,
+                &description,
+                persona,
+                *max_sessions,
+                &uuid_like(),
+            ) {
+                Ok(p) => {
+                    match format {
+                        Format::Json => emit(
+                            format,
+                            "runtime.publish-agent",
+                            true,
+                            &serde_json::json!({
+                                "event_id": p.event_id,
+                                "pubkey": p.pubkey,
+                                "kind": 30177,
+                                "persona_id": persona,
+                            }),
+                        ),
+                        Format::Text => {
+                            println!("published managed-agent {}", p.event_id);
+                            println!("  persona   {persona}");
+                            println!("  signed by {}", p.pubkey);
+                        }
+                    }
+                    ExitCode::from(exit::OK)
+                }
+                Err(e) => {
+                    eprintln!("error: {e}");
+                    ExitCode::from(exit::UPSTREAM)
+                }
+            }
+        }
+        RuntimeCmd::Supervisor {
+            relay,
+            buzz_acp,
+            agent_command,
+            agent_owner,
+            max_concurrent,
+            respond_to,
+            idle_timeout,
+        } => {
+            let buzz_acp = buzz_acp.clone().unwrap_or_else(|| {
+                let debug = root.join("vendor/buzz/target/debug/buzz-acp");
+                let release = root.join("vendor/buzz/target/release/buzz-acp");
+                if debug.exists() {
+                    debug
+                } else {
+                    release
+                }
+            });
+            let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+            {
+                let stop = stop.clone();
+                let _ = ctrlc_set(stop);
+            }
+            let opts = waggle_hive::supervisor::SupervisorOptions {
+                project_root: root.to_path_buf(),
+                relay_url: relay.clone(),
+                buzz_acp,
+                agent_command: agent_command.clone(),
+                agent_owner: agent_owner.clone(),
+                max_concurrent: *max_concurrent,
+                respond_to: respond_to.clone(),
+                idle_timeout_secs: *idle_timeout,
+            };
+            match waggle_hive::supervisor::run(opts, stop) {
+                Ok(()) => ExitCode::from(exit::OK),
+                Err(e) => {
+                    eprintln!("error: {e}");
+                    ExitCode::from(exit::SYSTEM)
+                }
+            }
+        }
+    }
+}
+
+fn ctrlc_set(stop: std::sync::Arc<std::sync::atomic::AtomicBool>) -> Result<(), String> {
+    ctrlc::set_handler(move || {
+        stop.store(true, std::sync::atomic::Ordering::SeqCst);
+        eprintln!("supervisor: stopping…");
+    })
+    .map_err(|e| e.to_string())
 }
 
 /// Pull `display_name` and `description` out of a compiled pack's persona frontmatter.
@@ -1530,9 +2444,26 @@ fn read_pack_persona(pack: &std::path::Path) -> Result<(String, String), String>
         .filter_map(Result::ok)
         .find(|e| e.file_name().to_string_lossy().ends_with(".persona.md"))
         .ok_or_else(|| format!("no .persona.md found in {}", agents.display()))?;
+    parse_persona_frontmatter(&entry.path())
+}
 
-    let text = std::fs::read_to_string(entry.path())
-        .map_err(|e| format!("cannot read {}: {e}", entry.path().display()))?;
+/// Same as [`read_pack_persona`], but requires an explicit persona id (Story 1.7).
+fn read_pack_persona_named(
+    pack: &std::path::Path,
+    persona_id: &str,
+) -> Result<(String, String), String> {
+    let path = pack
+        .join("agents")
+        .join(format!("{persona_id}.persona.md"));
+    if !path.is_file() {
+        return Err(format!("persona file not found: {}", path.display()));
+    }
+    parse_persona_frontmatter(&path)
+}
+
+fn parse_persona_frontmatter(path: &std::path::Path) -> Result<(String, String), String> {
+    let text = std::fs::read_to_string(path)
+        .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
 
     // Frontmatter only: stop at the closing delimiter so body text cannot masquerade
     // as a field.
@@ -1542,16 +2473,19 @@ fn read_pack_persona(pack: &std::path::Path) -> Result<(String, String), String>
         .take_while(|l| l.trim() != "---")
         .collect();
 
-    let field = |key: &str| -> Option<String> {
-        frontmatter.iter().find_map(|l| {
-            l.strip_prefix(&format!("{key}: "))
-                .map(|v| v.trim().trim_matches('"').replace("\\\"", "\""))
-        })
-    };
+    let mut display_name = None;
+    let mut description = None;
+    for line in frontmatter {
+        if let Some(v) = line.strip_prefix("display_name:") {
+            display_name = Some(v.trim().trim_matches('"').to_string());
+        } else if let Some(v) = line.strip_prefix("description:") {
+            description = Some(v.trim().trim_matches('"').to_string());
+        }
+    }
 
     Ok((
-        field("display_name").ok_or("persona frontmatter has no display_name")?,
-        field("description").unwrap_or_default(),
+        display_name.ok_or_else(|| format!("{}: missing display_name", path.display()))?,
+        description.ok_or_else(|| format!("{}: missing description", path.display()))?,
     ))
 }
 

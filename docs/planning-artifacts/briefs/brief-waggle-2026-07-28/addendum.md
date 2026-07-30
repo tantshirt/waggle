@@ -29,8 +29,9 @@ in intent, for the PRD to turn into epics.
 | `gds` | Game dev | The `bmm` lifecycle with GDD canvases replacing PRDs |
 | `wds` | Design-first UX | Design-spec canvases feeding the `bmm` PM agent |
 
-Installed today: `core` 6.10.0, `bmm` 6.10.0, `bmb` v2.1.0, `tea` v1.19.1. `cis`, `gds`,
-and `wds` are deferred to post-pilot epics. `[BMAD]`
+Installed and compiled into the full hive mirror: `core` 6.10.0, `bmm` 6.10.0,
+`bmb` v2.1.0, `tea` v1.19.1, `cis` v0.2.1, `gds` v0.6.0, `wds` v0.4.3 — phase rooms,
+`waggle sync`, and lazy ACP supervisor. `[BMAD]`
 
 ## 2. Event kind selection — candidates (→ architecture)
 

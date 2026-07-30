@@ -1,146 +1,101 @@
-# waggle
+# Waggle — powered by BMAD
 
 **Agentic method modules, compiled to a Buzz hive.**
 
-Waggle is a self-hostable, Nostr-based team workspace where every agent from the
-BMAD Method™ agent framework — across all official modules — runs as a first-class
-member with its own keypair, and every artifact, handoff, and quality gate is a
-signed event in one auditable log.
+Waggle is a self-hostable, [Nostr](https://github.com/nostr-protocol/nips)-based team workspace where every agent from the [BMAD Method](https://github.com/bmad-code-org/BMAD-METHOD) runs as a first-class member with its own keypair, and every artifact, handoff, and quality gate is a signed event in one auditable log.
 
-It is a **distribution**, not a fork. Waggle self-hosts stock
-[Buzz](https://github.com/block/buzz) from upstream and adds a thin compilation and
-configuration layer on top. The Buzz codebase is treated as an external service and
-is never modified — CI asserts the checkout is byte-clean.
+It is a **distribution**, not a fork. Waggle self-hosts stock [Buzz](https://github.com/block/buzz) from upstream and adds a thin compilation and configuration layer on top. The Buzz codebase is treated as an external service and is never modified.
 
-> **Not affiliated with BMad Code, LLC.** Waggle is an independent, community
-> distribution that is *compatible with* the BMAD Method™. "BMad", "BMad Method",
-> and related marks are trademarks of BMad Code, LLC. See [NOTICE](NOTICE).
+> **Not affiliated with BMad Code, LLC.** Waggle is an independent, community distribution that is *compatible with* the BMAD Method™. "BMad", "BMad Method", and related marks are trademarks of BMad Code, LLC. See [NOTICE](NOTICE).
 
 ---
 
-## Status: the pilot works
+## Who it's for
 
-The core thesis is proven end to end against a real, unmodified Buzz relay.
+- **Operators** who want BMAD's full method (software, game, creative, builder, testing) as Buzz Desktop rooms and agents — without building a custom UI.
+- **Contributors** who want a clear path to improve the compiler, channel UX, docs, or gates while keeping BMAD as the method source of truth.
 
-```
-$ waggle compile --module tea --agent bmad-tea
-compiled bmad-tea -> packs/tea
-  skills       9 copied
-  prompt-only  GATE (carried into the persona body, no skill)
-  dropped      activation_steps_append — no persona-pack equivalent
+If you already use BMAD Help in a CLI or IDE, Waggle is the same orientation model in a team hive: choose a path, work in rooms, ask what's next anytime.
 
-$ buzz pack validate packs/tea
-Valid.
-```
+## How it works
 
-And the gate — the reason the project exists — fires for real. **But see the correction
-below: the gate *mechanism* works and its *attribution* does not.**
-
-```
-verdict (CONCERNS, P1, with rationale)
-  → human reaction ✅
-    → compiled workflow fires
-      → waggle-gate-record
-           verdict-event: ae98ddf4…
-           approver:      47e6e1db…
-           approved-at:   1785264314
+```text
+BMAD Method install (_bmad/)
+        │
+        ▼
+  waggle sync / compile
+        │
+        ├── persona packs (agents + skills)
+        ├── channel + canvas templates
+        ├── gate workflows
+        └── help catalog → #help canvas
+        │
+        ▼
+  Buzz Desktop hive
+  (@mention agents · phase rooms · human ✅ gates)
 ```
 
-**FR-22 is satisfied — but only after a reviewer gate caught that it wasn't.**
-An earlier version of this README claimed it, wrongly: gate records were being signed by the
-**relay keypair**, and the approver name came from an `actor` tag that any client can forge.
-Every test passed, because none of them asked *who signed it*.
+1. Install BMAD modules (or refresh with `waggle sync`).
+2. Waggle compiles them into Buzz persona packs and provisions phase rooms.
+3. You work in Buzz Desktop: `@mention` agents, follow path rooms, approve gates with ✅.
 
-The fix (UP-18): `waggle gate` reads the reactions itself, takes the approver from each
-reaction's **signature-bound pubkey**, checks it against the relay-signed admin list, and
-publishes the record under waggle's own agent identity. The compiled workflow was demoted to
-an advisory *notice* that names no approver at all.
+Details: [docs/how-waggle-works.md](docs/how-waggle-works.md).
 
-```
-$ waggle gate --role tea --channel <ch> --verdict-event <id> --verdict CONCERNS
-CONCERNS approved by 47e6e1db…
-record 4dc6742c…
-  signed by 47e6e1db… (waggle identity, not the relay)
-```
+## Hive UX — hubs and paths
 
-Verified in the log: signed by the agent, not the relay's `79be667e…`, and the id recomputes.
-Guarded by `scripts/verify-gate-attribution.sh`.
+Open **`#help` first**. It is the Desktop equivalent of slash-command `bmad-help`: pick a path, or describe your goal and `@mention` any agent.
 
-### What works today
+**Always-on Help:** In *any* room, ask an agent "what's next?" / "continue" / **BH**. Agents load `bmad-help`, continue from where you left off, and should not dump the full catalog.
 
-| Capability | Command |
-|---|---|
-| Version preflight, refuses outside the supported range | `waggle preflight` |
-| Agent identity provisioning, secrets never printed | `waggle identity provision --role tea` |
-| List identities (public data only) | `waggle identity list` |
-| Enumerate modules, agents, and provenance | `waggle modules` |
-| Compile a module to a validated persona pack + gate workflow | `waggle compile --module tea` |
-| Provision a module's channels and canvases, idempotently | `waggle provision --module tea` |
-| Publish an agent's profile under its own key | `waggle identity publish-profile --role tea --pack packs/tea` |
+| Hub / path | Plain label | Rooms |
+|---|---|---|
+| `#help` | Path chooser + BMAD Help | — |
+| `#party` | Multi-agent roundtable | — |
+| **Software** | Build a product | `#planning` → `#architecture` → `#ux-design` → `#story` → `#implementation` → Testing |
+| **Game** | Build a game | `#gds-design` → `#gds-production` |
+| **Creative** | Ideate / brainstorm | `#ideation` (winners → `#planning`) |
+| **Builder** | Extend the method | `#bmb-workshop` |
+| **Testing** | Prove and gate | `#test-strategy` → `#gate` |
 
-### What is not done
+Optional: group these into Buzz Desktop sidebar sections to match the table. Channel *names* stay stable so re-provision does not fork rooms.
 
-Honest accounting — see `docs/implementation-artifacts/sprint-status.yaml`.
-
-| Gap | Blocked on |
-|---|---|
-| A live agent generating its own verdict (1.7, 1.9) | LLM provider credentials; `buzz-acp` needs an agent runtime on PATH |
-| ~~CI-built relay image (1.3)~~ | **Unblocked** — `ghcr.io/block/buzz` is public; pull it. AD-17's build pipeline is redundant (UP-08 withdrawn) |
-| Relay membership registration (1.5) | A stable relay signing key; the pubkey allowlist is off by default, so nothing needs it yet |
-| Modules beyond the pilot | **Done.** `bmm` compiles — 6 agents, zero compiler changes (SM-5) |
-| Agent roster membership in channels | Same live-agent blocker: rosters report `no live instances` |
-
-Stories 1.8/1.9 were exercised with a verdict published by hand rather than generated
-by an agent. The gate mechanics and the approver's attribution are both real; only the
-verdict's *author* was simulated.
+Experience design: [docs/planning-artifacts/ux-designs/ux-waggle-2026-07-30/](docs/planning-artifacts/ux-designs/ux-waggle-2026-07-30/).
 
 ## Quick start
 
-Full detail, including the port-conflict and Docker gotchas, is in
-[`docs/dev-setup.md`](docs/dev-setup.md).
+Full walkthrough (clean machine → first signed message): [`docs/dev-setup.md`](docs/dev-setup.md).
 
 ```bash
+# Clone this repo (waggle is the publishable root)
+git clone <your-waggle-remote> waggle && cd waggle
+
+# Substrate (gitignored; never modify tracked files inside)
 git clone --depth 1 --branch v0.4.26 https://github.com/block/buzz.git vendor/buzz
 cd vendor/buzz && cp -n .env.example .env
 . ./bin/activate-hermit && just setup && just relay    # terminal 1
 
-cargo build --workspace                                 # terminal 2
-./target/debug/waggle preflight
-./target/debug/waggle identity provision --role tea
-./target/debug/waggle compile --module tea --agent bmad-tea
+cargo build --workspace                                 # terminal 2 (repo root)
+./target/debug/waggle sync --relay http://localhost:3100 \
+  --buzz-cli ./vendor/buzz/target/debug/buzz
+
+./target/debug/waggle runtime supervisor \
+  --relay ws://localhost:3100 \
+  --agent-owner <your-desktop-pubkey-hex>
 ```
 
-You do **not** need Rust, Node, or pnpm installed — Buzz's Hermit supplies them, pinned.
+Then open Buzz Desktop against the local relay and start in `#help`.
 
-## The three deliverables
+**Global skills:** `waggle sync` symlinks project `.claude/skills` into `~/.claude/skills` (or `$CLAUDE_SKILLS_HOME`) so Claude ACP can discover them. Use `--skip-global-skills` in CI/sandboxes.
 
-**1. Installer / compiler (`waggle`)** — reads a BMAD installation and emits Buzz
-persona packs and workflow YAML. Deterministic and byte-reproducible.
+## Status
 
-**2. Channel & canvas templates**, per module — `templates/<module>/channels.json`
-compiles into the pack, and `waggle provision` delegates creation to the substrate while
-adding the idempotence it lacks (UP-10). Canvases come free in the same file.
+The pilot works end to end against an unmodified Buzz relay: compile, provision, signed agents, and human-approved gates with correct attribution. Live agent replies still need Anthropic/Claude credentials in Desktop.
 
-**3. Agent runtime config** — one keypair per role, scoped memberships, MCP config.
-*Identity and profile publication work; live sessions need credentials.*
-
-## Module coverage
-
-| Module | Status |
-|---|---|
-| `tea` | **Compiles, gate fires, channels + canvas provision** |
-| `bmm` | **Compiles — 6 agents, 2 channels. Proved SM-5: no compiler changes needed** |
-| `core`, `bmb` | Installed; `bmb` ships no persona agents |
-| `cis`, `gds`, `wds` | Not installed; deferred until the pattern generalizes |
-
-**Quality gates are Buzz approval gates.** A human reaction on an artifact event fires
-a workflow. No custom UI. Notably the gate does *not* use Buzz's `request_approval`
-step — upstream marks such runs failed rather than suspended (UP-01), so waggle owns
-gate state and derives it from the log instead.
+Honest gap tracking: [`docs/implementation-artifacts/sprint-status.yaml`](docs/implementation-artifacts/sprint-status.yaml). Longer pilot notes live under [`docs/`](docs/) — not in this front door.
 
 ## Architecture
 
-Hexagonal — ports and adapters. Six crates:
+Hexagonal — ports and adapters:
 
 | Crate | Role |
 |---|---|
@@ -148,57 +103,61 @@ Hexagonal — ports and adapters. Six crates:
 | `waggle-method` | Reads a BMAD installation. Read-only. |
 | `waggle-emit` | Renders packs and workflow YAML. Deterministic. |
 | `waggle-hive` | Talks to the relay. Never modifies it. |
-| `waggle-gate` | *(gate logic currently lives in `waggle-core::gate`)* |
-| `waggle-cli` | The only crate that wires the others |
+| `waggle-cli` | Wires the others |
 
-The binding decisions are `AD-1`…`AD-20` in
-[`docs/planning-artifacts/architecture/`](docs/planning-artifacts/architecture/). The
-load-bearing one is **AD-5**: because waggle is Rust and BMAD's resolver is Python, the
-override merge is reimplemented — so a differential test compares waggle's resolved
-descriptor against BMAD's own resolver for every installed agent. It is mandatory and
-non-skippable.
+Binding decisions: [`docs/planning-artifacts/architecture/`](docs/planning-artifacts/architecture/). **AD-5:** override merge is reimplemented in Rust and differentially tested against BMAD's Python resolver.
+
+## Module coverage
+
+| Module | What you get |
+|---|---|
+| `core` | `#help` + `#party`; help/party skills |
+| `bmm` | Software path rooms + 6 agents |
+| `wds` | Design agents; merges into `#ux-design` |
+| `cis` | Creative path `#ideation` + ideation agents |
+| `gds` | Game path `#gds-*` + game agents |
+| `bmb` | Builder path `#bmb-workshop` |
+| `tea` | Testing path `#test-strategy` + `#gate` |
+
+**Quality gates are Buzz approval gates.** A human ✅ on a verdict event is recorded by `waggle gate` under the correct agent identity (not the relay).
 
 ## Verification
 
 ```bash
-cargo test --workspace                  # 84 tests
+cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings
 
-./scripts/verify-preflight.sh           # exit-code taxonomy
-./scripts/verify-identity.sh            # secret hygiene (greps the real key)
-./scripts/verify-pack-contract.sh       # pack validates AND validator rejects defects
-./scripts/verify-compile.sh             # determinism, full accounting, AD-7
-./scripts/verify-gate.sh                # end-to-end gate (needs a running relay)
-./scripts/verify-provision.sh           # channels + canvases, idempotence (needs a relay)
-./scripts/verify-cli.sh                 # command surface + exit-code taxonomy
-./scripts/verify-trail.sh               # signed artifacts, handoffs, priorities (needs a relay)
-./scripts/verify-gate-attribution.sh    # WHO SIGNED IT — the assertion everything else missed
+./scripts/verify-preflight.sh
+./scripts/verify-identity.sh
+./scripts/verify-pack-contract.sh
+./scripts/verify-compile.sh
+./scripts/verify-sync.sh
+./scripts/verify-cli.sh
+# Needs a running relay:
+./scripts/verify-gate.sh
+./scripts/verify-provision.sh
+./scripts/verify-trail.sh
+./scripts/verify-gate-attribution.sh
 ```
-
-Each negative-tests itself: a check that only asserts the happy path can pass while
-the thing it guards is broken. **Three times** in this project a test passed or failed
-for a reason unrelated to what it claimed to test, caught only by deliberately breaking
-the input. Tests were not enough on their own: the independent reviewer gates in
-`docs/planning-artifacts/*/reviews/` found a critical defect (UP-18) that every green
-test had missed, because the tests verified the mechanism and never asked who signed it. The portability lint, for example, is verified by poisoning a template with a
-forbidden kind and requiring the compile to fail.
 
 ## Documentation
 
 | Document | Contents |
 |---|---|
-| [`docs/dev-setup.md`](docs/dev-setup.md) | Clean machine to first signed message |
-| [`docs/dev-loop.md`](docs/dev-loop.md) | How stories get built |
-| [`docs/persona-pack-contract.md`](docs/persona-pack-contract.md) | The compiler's output contract, verified |
-| [`docs/research-notes.md`](docs/research-notes.md) | Upstream research + §6 corrections |
-| [`docs/upstream-issues.md`](docs/upstream-issues.md) | 18 upstream findings — **three withdrawn as our own error**, one a security defect |
-| [`docs/planning-artifacts/*/reviews/`](docs/planning-artifacts/) | Independent reviewer-gate reports |
-| [`docs/planning-artifacts/`](docs/planning-artifacts/) | Brief, PRD, architecture spine, epics |
+| [docs/README.md](docs/README.md) | Docs index |
+| [docs/how-waggle-works.md](docs/how-waggle-works.md) | High-level system explanation |
+| [docs/dev-setup.md](docs/dev-setup.md) | Clean machine → first signed message |
+| [docs/dev-loop.md](docs/dev-loop.md) | How stories get built |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | How to contribute |
+| [SECURITY.md](SECURITY.md) | How to report vulnerabilities |
 
 ## Pinned versions
 
-See [`BUZZ_VERSION`](BUZZ_VERSION) — Buzz `v0.4.26`, BMAD Method `6.10.0`, Rust `1.95.0`.
-Ranges, not just pins: waggle refuses to operate outside them.
+See [`BUZZ_VERSION`](BUZZ_VERSION) — Buzz `v0.4.26`, BMAD Method `6.10.0`, Rust `1.95.0`. Waggle refuses to operate outside the supported ranges.
+
+## Contributing
+
+Contributions welcome. Start with [CONTRIBUTING.md](CONTRIBUTING.md): setup, tests, PR expectations, and the hard rule **do not modify Buzz**.
 
 ## License
 

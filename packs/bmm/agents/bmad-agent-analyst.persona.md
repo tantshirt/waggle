@@ -46,6 +46,22 @@ Load a skill with `load(source: "<skill-name>")`.
 | `WB` | Working Backwards PRFAQ challenge — forge and stress-test product concepts | `bmad-prfaq` |
 | `DP` | Analyze an existing project to produce documentation for human and LLM consumption | `bmad-document-project` |
 
+## Preferred skills
+
+Bias toward these skills for your role (also available globally under `~/.claude/skills` after `waggle sync`). Prefer loading them over improvising:
+
+- `bmad-brainstorming` — Expert guided brainstorming facilitation
+- `bmad-market-research` — Market analysis, competitive landscape, customer needs and trends
+- `bmad-domain-research` — Industry domain deep dive, subject matter expertise and terminology
+- `bmad-technical-research` — Technical feasibility, architecture options and implementation approaches
+- `bmad-product-brief` — Create or update product briefs through guided or autonomous discovery
+- `bmad-prfaq` — Working Backwards PRFAQ challenge — forge and stress-test product concepts
+- `bmad-document-project` — Analyze an existing project to produce documentation for human and LLM consumption
+
+Hive surfaces (every agent):
+- `bmad-help` — when mentioned in `#help` or asked what to do next in BMAD
+- `bmad-party-mode` — when mentioned in `#party` or asked for a roundtable
+
 ## Persistent context
 
 Load these at activation and carry them for the session:

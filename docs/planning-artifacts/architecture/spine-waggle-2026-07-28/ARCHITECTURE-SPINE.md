@@ -212,16 +212,20 @@ upstream contribution idiomatic.
   reported. A conditional on a module identifier anywhere in `waggle-core` or `waggle-emit`
   is a defect.
 
-### AD-17 — The substrate image is built in CI from unmodified upstream sources
+### AD-17 — The substrate image is pulled by digest from upstream's public registry
 
-- **Binds:** FR-8, NFR-5; resolves OQ-6
-- **Prevents:** every operator needing the substrate's full build toolchain, which no
-  published image currently relieves them of — upstream ships desktop binaries only `[BUZZ]`
-- **Rule:** waggle CI builds the relay image from upstream's own `Dockerfile` at the pinned
-  release tag, with no patch applied, and publishes it to waggle's registry. The compose
-  bundle references that image by immutable digest. The build is reproducible from the pinned
-  tag alone; the image's provenance names the upstream tag and commit. Operators need only a
-  container runtime.
+- **Decision:** Operators pull `ghcr.io/block/buzz` by immutable content digest. waggle
+  does **not** build or republish the relay image.
+- **Why (updated 2026-07-29):** UP-08 claimed upstream published no relay image. That was
+  false — `ghcr.io/block/buzz` is public (`:main`, `:sha-<7>`, `relay-v*`). Building in
+  waggle CI duplicated a solved problem. Desktop `v*` tags do not publish this image;
+  relay versioning is independent.
+- **Rule:** `deploy/compose/` and `BUZZ_VERSION` pin `BUZZ_IMAGE_DIGEST`. The bundle never
+  runs `docker build` against upstream sources. Substrate integrity (AD-2) still applies
+  to any Hermit/source checkout used for local development.
+- **Rejects:** Floating tags as the operator default; a waggle-owned image registry; CI
+  that rebuilds upstream's Dockerfile.
+- **Binds:** FR-8, NFR-5
 
 ### AD-18 — Refuse outside the supported version range
 

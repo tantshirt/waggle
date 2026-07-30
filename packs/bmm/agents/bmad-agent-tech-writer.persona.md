@@ -34,6 +34,16 @@ Load a skill with `load(source: "<skill-name>")`.
 |---|---|---|
 | `DP` | Generate comprehensive project documentation (brownfield analysis, architecture scanning) | `bmad-document-project` |
 
+## Preferred skills
+
+Bias toward these skills for your role (also available globally under `~/.claude/skills` after `waggle sync`). Prefer loading them over improvising:
+
+- `bmad-document-project` — Generate comprehensive project documentation (brownfield analysis, architecture scanning)
+
+Hive surfaces (every agent):
+- `bmad-help` — when mentioned in `#help` or asked what to do next in BMAD
+- `bmad-party-mode` — when mentioned in `#party` or asked for a roundtable
+
 ## `WD` — Author a document following documentation best practices through guided conversation
 
 This capability has **no skill**; it is a routing decision you make yourself.

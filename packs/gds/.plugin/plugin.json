@@ -1,0 +1,27 @@
+{
+  "$schema": "https://open-plugin-spec.org/schema/v1/plugin.json",
+  "id": "dev.waggle.pack.gds",
+  "name": "waggle — gds",
+  "version": "0.6.0",
+  "description": "5 agents compiled from the gds module of a BMAD Method installation.",
+  "author": "The waggle contributors",
+  "license": "Apache-2.0",
+  "personas": [
+    "agents/gds-agent-game-architect.persona.md",
+    "agents/gds-agent-game-designer.persona.md",
+    "agents/gds-agent-game-dev.persona.md",
+    "agents/gds-agent-game-solo-dev.persona.md",
+    "agents/gds-agent-tech-writer.persona.md"
+  ],
+  "pack_instructions": "instructions.md",
+  "defaults": {
+    "triggers": {
+      "mentions": true,
+      "keywords": [],
+      "all_messages": false
+    },
+    "subscribe": [],
+    "thread_replies": true,
+    "broadcast_replies": false
+  }
+}

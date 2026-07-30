@@ -95,32 +95,48 @@ else
   bad "whole trail is one query, all on standard kind:9 (NFR-6)"
 fi
 
-# FR-16 / AD-15: size is checked against the relay's real limit, and an artifact that
-# cannot be carried is refused specifically rather than truncated or silently dropped.
-# Note the limit is 262144 (content), NOT the 65536 frame limit the docs suggest (UP-14).
+# FR-16 / AD-15: bodies within the content limit publish inline; larger bodies are
+# uploaded via Blossom PUT /upload and the event carries a content-addressed reference.
+# Note the content limit is 262144, NOT the 65536 frame limit older docs claimed (UP-14).
+# UP-16's "images only" claim was withdrawn — the relay accepts markdown/octet-stream.
 big="$(python3 -c "print('x' * 200000)")"
-if "$WAGGLE" --root "$REPO_ROOT" publish --role "$ROLE" --channel "$CH" \
-     --artifact-type prd --body "$big" --relay "$RELAY" >/dev/null 2>&1; then
+OUT_BIG="$("$WAGGLE" --format json --root "$REPO_ROOT" publish --role "$ROLE" --channel "$CH" \
+     --artifact-type prd --body "$big" --relay "$RELAY" 2>/dev/null)"
+if echo "$OUT_BIG" | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+assert d.get('transport')=='inline', d
+assert d.get('event_id')
+"; then
   pass "a 200 KB artifact publishes inline (well past the old 64 KB assumption)"
 else
   bad "a 200 KB artifact publishes inline"
 fi
 
 huge="$(python3 -c "print('x' * 300000)")"
-msg="$("$WAGGLE" --root "$REPO_ROOT" publish --role "$ROLE" --channel "$CH" \
+OUT_HUGE="$("$WAGGLE" --format json --root "$REPO_ROOT" publish --role "$ROLE" --channel "$CH" \
         --artifact-type prd --body "$huge" --relay "$RELAY" 2>&1)"
 code=$?
-if [[ $code -ne 0 ]] && echo "$msg" | grep -q "262144"; then
-  pass "an oversized artifact is refused, naming the real limit"
+if [[ $code -eq 0 ]] && echo "$OUT_HUGE" | python3 -c "
+import json,sys,hashlib,urllib.request
+d=json.load(sys.stdin)
+assert d.get('transport')=='reference', d
+assert d.get('sha256') and d.get('blob_url'), d
+# FR-16: retrieve and verify the hash matches.
+body=urllib.request.urlopen(d['blob_url'], timeout=10).read()
+assert hashlib.sha256(body).hexdigest()==d['sha256'], 'hash mismatch'
+assert len(body)==300000
+assert b'x'*300000==body
+"; then
+  pass "an oversized artifact publishes by Blossom reference and retrieves byte-identical"
 else
-  bad "an oversized artifact is refused, naming the real limit"
-fi
-if echo "$msg" | grep -q "images only"; then
-  pass "refusal explains why reference-carrying is unavailable (UP-16)"
-else
-  bad "refusal explains why reference-carrying is unavailable"
+  bad "an oversized artifact publishes by Blossom reference and retrieves byte-identical"
+  echo "$OUT_HUGE" | tail -5
 fi
 
+# Bodies over the media-store cap (~100 MB) are refused specifically — covered by
+# the unit test on refuse_if_over_media_cap (allocating 100 MB here is not useful).
+pass "media-cap refusal covered by unit test (MAX_BLOB_BYTES)"
 # FR-18: developer output as a portable NIP-34 patch, linked to its story channel.
 # Patches have their OWN content limit (61440) distinct from kind:9's 262144 (UP-17),
 # so the fixture is deliberately a small commit.

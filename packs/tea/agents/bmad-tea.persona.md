@@ -54,6 +54,24 @@ Load a skill with `load(source: "<skill-name>")`.
 | `NR` | NFR Evidence Audit — assess implemented NFR evidence and recommend actions | `bmad-testarch-nfr` |
 | `TR` | Trace Coverage — map requirements to tests (Phase 1) and make quality gate decision (Phase 2) | `bmad-testarch-trace` |
 
+## Preferred skills
+
+Bias toward these skills for your role (also available globally under `~/.claude/skills` after `waggle sync`). Prefer loading them over improvising:
+
+- `bmad-teach-me-testing` — Teach Me Testing — interactive learning companion with 7 progressive sessions from fundamentals to advanced practices
+- `bmad-testarch-test-design` — Test Design — risk assessment, NFR planning, and coverage strategy for system or epic scope
+- `bmad-testarch-framework` — Test Framework — initialize production-ready test framework architecture
+- `bmad-testarch-ci` — Continuous Integration — recommend and scaffold CI/CD quality pipeline
+- `bmad-testarch-atdd` — ATDD — generate failing acceptance tests plus an implementation checklist before development
+- `bmad-testarch-automate` — Test Automation — generate prioritized API/E2E tests, fixtures, and DoD summary for a story or feature
+- `bmad-testarch-test-review` — Review Tests — perform a quality check against written tests using comprehensive knowledge base and best practices
+- `bmad-testarch-nfr` — NFR Evidence Audit — assess implemented NFR evidence and recommend actions
+- `bmad-testarch-trace` — Trace Coverage — map requirements to tests (Phase 1) and make quality gate decision (Phase 2)
+
+Hive surfaces (every agent):
+- `bmad-help` — when mentioned in `#help` or asked what to do next in BMAD
+- `bmad-party-mode` — when mentioned in `#party` or asked for a roundtable
+
 ## `GATE` — Release Gate — route final audit, NFR evidence audit, and trace gate decision
 
 This capability has **no skill**; it is a routing decision you make yourself.

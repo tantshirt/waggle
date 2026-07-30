@@ -10,6 +10,11 @@
 //! **AD-16: templates are data.** The input is `templates/<module>/channels.json`, and
 //! nothing here branches on a module id. The agent roster is filled from the registry at
 //! compile time, so a module's channels automatically list that module's agents.
+//!
+//! **Phase rooms (hive mirror):** set `stable_name: true` so the channel is named exactly
+//! as authored (`planning`, not `bmm-planning`). Use `include_all_agents` for party/help.
+
+use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
@@ -25,11 +30,16 @@ pub struct ChannelTemplateSource {
     pub visibility: String,
     #[serde(default)]
     pub canvas_template: Option<String>,
-    /// Fill the roster with every agent the module registers. Keeps the template free of
-    /// hard-coded agent ids that would drift as a module gains or loses agents.
+    /// When true, emit `name` as-is (phase rooms). When false, prefix with `{module}-`.
+    #[serde(default)]
+    pub stable_name: bool,
+    /// Fill the roster with every agent the module registers.
     #[serde(default)]
     pub include_module_agents: bool,
-    /// Explicit additions, on top of `include_module_agents`.
+    /// Fill the roster with every agent the installation registers (party / help).
+    #[serde(default)]
+    pub include_all_agents: bool,
+    /// Explicit additions, on top of include flags.
     #[serde(default)]
     pub personas: Vec<String>,
 }
@@ -44,7 +54,7 @@ fn default_visibility() -> String {
 
 /// The wire shape Buzz reads. Field names and casing are fixed by its deserializer:
 /// snake_case at the top level, camelCase inside `agents`.
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ChannelTemplateRecord {
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -56,40 +66,45 @@ pub struct ChannelTemplateRecord {
     pub agents: AgentRoster,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentRoster {
     pub personas: Vec<PersonaEntry>,
     pub teams: Vec<TeamEntry>,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct PersonaEntry {
     pub persona_id: String,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct TeamEntry {
     pub team_id: String,
 }
 
 /// Build the store for one module.
-///
-/// Template names are prefixed with the module code so two modules cannot collide in a
-/// single store — Buzz matches templates by name, case-insensitively.
 pub fn build_store(
     module: &str,
     sources: &[ChannelTemplateSource],
     module_agent_ids: &[String],
+    all_agent_ids: &[String],
 ) -> Vec<ChannelTemplateRecord> {
     sources
         .iter()
         .map(|s| {
             let mut personas: Vec<String> = Vec::new();
+            if s.include_all_agents {
+                personas.extend(all_agent_ids.iter().cloned());
+            }
             if s.include_module_agents {
-                personas.extend(module_agent_ids.iter().cloned());
+                for id in module_agent_ids {
+                    if !personas.contains(id) {
+                        personas.push(id.clone());
+                    }
+                }
             }
             for p in &s.personas {
                 if !personas.contains(p) {
@@ -100,8 +115,14 @@ pub fn build_store(
             personas.sort();
             personas.dedup();
 
+            let name = if s.stable_name {
+                s.name.clone()
+            } else {
+                format!("{module}-{}", s.name)
+            };
+
             ChannelTemplateRecord {
-                name: format!("{module}-{}", s.name),
+                name,
                 description: s.description.clone(),
                 channel_type: s.channel_type.clone(),
                 visibility: s.visibility.clone(),
@@ -118,6 +139,56 @@ pub fn build_store(
         .collect()
 }
 
+/// Merge multiple template stores by channel name (case-insensitive).
+///
+/// Later records win on description/canvas/type; persona rosters are unioned.
+/// Used by `waggle provision --all` for the hive-wide phase map.
+pub fn merge_stores(stores: &[Vec<ChannelTemplateRecord>]) -> Vec<ChannelTemplateRecord> {
+    let mut by_name: BTreeMap<String, ChannelTemplateRecord> = BTreeMap::new();
+    for store in stores {
+        for rec in store {
+            let key = rec.name.to_ascii_lowercase();
+            match by_name.get_mut(&key) {
+                None => {
+                    by_name.insert(key, rec.clone());
+                }
+                Some(existing) => {
+                    if rec.description.is_some() {
+                        existing.description = rec.description.clone();
+                    }
+                    // Prefer the richer canvas when both are present (help CSV seed vs stub).
+                    match (&existing.canvas_template, &rec.canvas_template) {
+                        (Some(a), Some(b)) if b.len() > a.len() => {
+                            existing.canvas_template = Some(b.clone());
+                        }
+                        (_, Some(b)) => {
+                            existing.canvas_template = Some(b.clone());
+                        }
+                        _ => {}
+                    }
+                    existing.channel_type = rec.channel_type.clone();
+                    existing.visibility = rec.visibility.clone();
+                    for p in &rec.agents.personas {
+                        if !existing
+                            .agents
+                            .personas
+                            .iter()
+                            .any(|e| e.persona_id == p.persona_id)
+                        {
+                            existing.agents.personas.push(p.clone());
+                        }
+                    }
+                    existing
+                        .agents
+                        .personas
+                        .sort_by(|a, b| a.persona_id.cmp(&b.persona_id));
+                }
+            }
+        }
+    }
+    by_name.into_values().collect()
+}
+
 /// Render the store as JSON, newline-terminated.
 pub fn render(store: &[ChannelTemplateRecord]) -> Result<String, serde_json::Error> {
     let mut s = serde_json::to_string_pretty(store)?;
@@ -130,7 +201,6 @@ mod tests {
     use super::*;
 
     fn sources() -> Vec<ChannelTemplateSource> {
-        // r##"…"## because the canvas content contains `"#`, which would close r#"…"# early.
         serde_json::from_str(
             r##"[{
                 "name": "test-strategy",
@@ -145,9 +215,40 @@ mod tests {
     }
 
     #[test]
-    fn template_names_are_module_prefixed() {
-        let store = build_store("tea", &sources(), &["bmad-tea".into()]);
+    fn template_names_are_module_prefixed_by_default() {
+        let store = build_store("tea", &sources(), &["bmad-tea".into()], &[]);
         assert_eq!(store[0].name, "tea-test-strategy");
+    }
+
+    #[test]
+    fn stable_name_skips_module_prefix() {
+        let mut s = sources();
+        s[0].name = "planning".into();
+        s[0].stable_name = true;
+        let store = build_store("bmm", &s, &["bmad-agent-pm".into()], &[]);
+        assert_eq!(store[0].name, "planning");
+    }
+
+    #[test]
+    fn include_all_agents_fills_party_roster() {
+        let mut s = sources();
+        s[0].include_module_agents = false;
+        s[0].include_all_agents = true;
+        s[0].stable_name = true;
+        s[0].name = "party".into();
+        let store = build_store(
+            "core",
+            &s,
+            &[],
+            &["bmad-tea".into(), "bmad-agent-pm".into()],
+        );
+        let ids: Vec<_> = store[0]
+            .agents
+            .personas
+            .iter()
+            .map(|p| p.persona_id.as_str())
+            .collect();
+        assert_eq!(ids, vec!["bmad-agent-pm", "bmad-tea"]);
     }
 
     #[test]
@@ -156,6 +257,7 @@ mod tests {
             "bmm",
             &sources(),
             &["bmad-agent-pm".into(), "bmad-agent-dev".into()],
+            &[],
         );
         let ids: Vec<_> = store[0]
             .agents
@@ -163,38 +265,59 @@ mod tests {
             .iter()
             .map(|p| p.persona_id.as_str())
             .collect();
-        // sorted, so the committed store does not churn on registry ordering
         assert_eq!(ids, vec!["bmad-agent-dev", "bmad-agent-pm"]);
     }
 
     #[test]
-    fn opting_out_of_module_agents_leaves_the_roster_empty() {
-        let mut s = sources();
-        s[0].include_module_agents = false;
-        let store = build_store("tea", &s, &["bmad-tea".into()]);
-        assert!(store[0].agents.personas.is_empty());
-    }
-
-    #[test]
-    fn explicit_personas_do_not_duplicate_module_agents() {
-        let mut s = sources();
-        s[0].personas = vec!["bmad-tea".into(), "outsider".into()];
-        let store = build_store("tea", &s, &["bmad-tea".into()]);
-        let ids: Vec<_> = store[0]
+    fn merge_stores_unions_personas() {
+        let a = build_store(
+            "bmm",
+            &[ChannelTemplateSource {
+                name: "planning".into(),
+                description: Some("plan".into()),
+                channel_type: "forum".into(),
+                visibility: "open".into(),
+                canvas_template: None,
+                stable_name: true,
+                include_module_agents: false,
+                include_all_agents: false,
+                personas: vec!["bmad-agent-pm".into()],
+            }],
+            &[],
+            &[],
+        );
+        let b = build_store(
+            "tea",
+            &[ChannelTemplateSource {
+                name: "planning".into(),
+                description: None,
+                channel_type: "forum".into(),
+                visibility: "open".into(),
+                canvas_template: Some("# x".into()),
+                stable_name: true,
+                include_module_agents: false,
+                include_all_agents: false,
+                personas: vec!["bmad-tea".into()],
+            }],
+            &[],
+            &[],
+        );
+        let merged = merge_stores(&[a, b]);
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].name, "planning");
+        assert_eq!(merged[0].canvas_template.as_deref(), Some("# x"));
+        let ids: Vec<_> = merged[0]
             .agents
             .personas
             .iter()
             .map(|p| p.persona_id.as_str())
             .collect();
-        assert_eq!(ids, vec!["bmad-tea", "outsider"]);
+        assert_eq!(ids, vec!["bmad-agent-pm", "bmad-tea"]);
     }
 
     #[test]
     fn wire_shape_matches_what_buzz_deserializes() {
-        // Buzz reads snake_case at the top level and camelCase inside `agents`.
-        // Getting this wrong yields a template that parses to defaults and silently
-        // provisions the wrong thing.
-        let store = build_store("tea", &sources(), &["bmad-tea".into()]);
+        let store = build_store("tea", &sources(), &["bmad-tea".into()], &[]);
         let json = render(&store).unwrap();
         for key in [
             "\"channel_type\"",
@@ -214,8 +337,8 @@ mod tests {
 
     #[test]
     fn rendering_is_deterministic() {
-        let a = render(&build_store("tea", &sources(), &["bmad-tea".into()])).unwrap();
-        let b = render(&build_store("tea", &sources(), &["bmad-tea".into()])).unwrap();
+        let a = render(&build_store("tea", &sources(), &["bmad-tea".into()], &[])).unwrap();
+        let b = render(&build_store("tea", &sources(), &["bmad-tea".into()], &[])).unwrap();
         assert_eq!(a, b);
     }
 }

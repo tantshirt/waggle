@@ -45,6 +45,19 @@ pub enum Provisioned {
     Created { id: String, canvas_applied: bool },
     /// Already present, left alone — the idempotent path (FR-25, NFR-2).
     AlreadyExists { id: String },
+    /// Already present; description and/or canvas were rewritten from the template.
+    Refreshed {
+        id: String,
+        description_updated: bool,
+        canvas_applied: bool,
+    },
+}
+
+/// Result of refreshing an existing channel's description / canvas.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RefreshResult {
+    pub description_updated: bool,
+    pub canvas_applied: bool,
 }
 
 /// Names of channels that already exist, lowercased for case-insensitive comparison.
@@ -152,6 +165,159 @@ pub fn provision_channel(
             .and_then(serde_json::Value::as_bool)
             .unwrap_or(false),
     })
+}
+
+/// Rewrite description and/or canvas on an existing channel (Buzz `channels update` + `canvas set`).
+///
+/// Used when templates change after first provision — create-only idempotence otherwise leaves
+/// Desktop showing stale copy.
+pub fn refresh_channel(
+    buzz_cli: &Path,
+    relay_url: &str,
+    secret_hex: &str,
+    channel_id: &str,
+    description: Option<&str>,
+    canvas: Option<&str>,
+) -> Result<RefreshResult, ChannelError> {
+    let mut description_updated = false;
+    let mut canvas_applied = false;
+
+    if let Some(desc) = description {
+        let out = Command::new(buzz_cli)
+            .env("BUZZ_PRIVATE_KEY", secret_hex)
+            .env("BUZZ_RELAY_URL", relay_url)
+            .args([
+                "channels",
+                "update",
+                "--channel",
+                channel_id,
+                "--description",
+                desc,
+            ])
+            .output()
+            .map_err(|source| ChannelError::CliUnavailable {
+                path: buzz_cli.to_path_buf(),
+                source,
+            })?;
+        if !out.status.success() {
+            return Err(ChannelError::CreateFailed {
+                name: channel_id.to_string(),
+                template: "channels update".into(),
+                stderr: String::from_utf8_lossy(&out.stderr).trim().to_string(),
+            });
+        }
+        description_updated = true;
+    }
+
+    if let Some(content) = canvas {
+        // `--content -` reads markdown from stdin (avoids huge argv / quoting issues).
+        let mut child = Command::new(buzz_cli)
+            .env("BUZZ_PRIVATE_KEY", secret_hex)
+            .env("BUZZ_RELAY_URL", relay_url)
+            .args(["canvas", "set", "--channel", channel_id, "--content", "-"])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .map_err(|source| ChannelError::CliUnavailable {
+                path: buzz_cli.to_path_buf(),
+                source,
+            })?;
+        if let Some(mut stdin) = child.stdin.take() {
+            use std::io::Write;
+            stdin
+                .write_all(content.as_bytes())
+                .map_err(|e| ChannelError::CreateFailed {
+                    name: channel_id.to_string(),
+                    template: "canvas set".into(),
+                    stderr: e.to_string(),
+                })?;
+        }
+        let out = child.wait_with_output().map_err(|e| ChannelError::CreateFailed {
+            name: channel_id.to_string(),
+            template: "canvas set".into(),
+            stderr: e.to_string(),
+        })?;
+        if !out.status.success() {
+            return Err(ChannelError::CreateFailed {
+                name: channel_id.to_string(),
+                template: "canvas set".into(),
+                stderr: String::from_utf8_lossy(&out.stderr).trim().to_string(),
+            });
+        }
+        canvas_applied = true;
+    }
+
+    Ok(RefreshResult {
+        description_updated,
+        canvas_applied,
+    })
+}
+
+/// Add a pubkey to a channel (idempotent best-effort). Returns Ok even when already a member.
+pub fn add_member(
+    buzz_cli: &Path,
+    relay_url: &str,
+    secret_hex: &str,
+    channel_id: &str,
+    pubkey: &str,
+    role: &str,
+) -> Result<(), ChannelError> {
+    let out = Command::new(buzz_cli)
+        .env("BUZZ_PRIVATE_KEY", secret_hex)
+        .env("BUZZ_RELAY_URL", relay_url)
+        .args([
+            "channels",
+            "add-member",
+            "--channel",
+            channel_id,
+            "--pubkey",
+            pubkey,
+            "--role",
+            role,
+        ])
+        .output()
+        .map_err(|source| ChannelError::CliUnavailable {
+            path: buzz_cli.to_path_buf(),
+            source,
+        })?;
+
+    if out.status.success() {
+        return Ok(());
+    }
+    let stderr = String::from_utf8_lossy(&out.stderr).to_ascii_lowercase();
+    let stdout = String::from_utf8_lossy(&out.stdout).to_ascii_lowercase();
+    let combined = format!("{stdout}{stderr}");
+    // Already-a-member / duplicate paths vary by substrate version.
+    if combined.contains("already")
+        || combined.contains("exists")
+        || combined.contains("duplicate")
+        || combined.contains("missing p tag")
+    {
+        return Ok(());
+    }
+    Err(ChannelError::CreateFailed {
+        name: channel_id.to_string(),
+        template: "add-member".into(),
+        stderr: String::from_utf8_lossy(&out.stderr).trim().to_string(),
+    })
+}
+
+/// Ensure every pubkey is a member of the channel. Reports failures without aborting.
+pub fn ensure_members(
+    buzz_cli: &Path,
+    relay_url: &str,
+    secret_hex: &str,
+    channel_id: &str,
+    pubkeys: &[String],
+) -> Vec<(String, String)> {
+    let mut failed = Vec::new();
+    for pk in pubkeys {
+        if let Err(e) = add_member(buzz_cli, relay_url, secret_hex, channel_id, pk, "member") {
+            failed.push((pk.clone(), e.to_string()));
+        }
+    }
+    failed
 }
 
 /// Personas the substrate could not resolve to a live agent, from a create response.

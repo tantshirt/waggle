@@ -259,6 +259,30 @@ Empty output means AD-2 holds. This is the check CI enforces.
 
 The keypair above is a throwaway used only against a local relay.
 
+## Full hive (Desktop + lazy ACP)
+
+After the relay is up and `cargo build -p waggle-cli` has succeeded:
+
+```bash
+# From the waggle repo root — install/compile all modules, provision phase rooms
+./target/debug/waggle sync \
+  --relay http://localhost:3100 \
+  --buzz-cli ./vendor/buzz/target/debug/buzz
+
+# Terminal A — lazy ACP supervisor (wake agents on @mention)
+./target/debug/waggle runtime supervisor \
+  --relay ws://localhost:3100 \
+  --agent-owner <your-desktop-pubkey-hex>
+
+# Terminal B — Buzz Desktop pointed at Local Dev (same relay)
+```
+
+Do **not** keep always-on `buzz-acp` processes for every agent; the supervisor spawns on
+mention and relies on `BUZZ_ACP_IDLE_TIMEOUT` (default 320s) to exit. Cap is
+`--max-concurrent` (default 4).
+
+See the README **Full hive** section for the phase-room map (`#help` → `#gate`).
+
 ## Troubleshooting
 
 | Symptom | Cause | Fix |

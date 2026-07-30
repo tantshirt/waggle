@@ -36,6 +36,17 @@ Load a skill with `load(source: "<skill-name>")`.
 | `CA` | Produce the architecture spine: the invariants that keep independently-built units consistent | `bmad-architecture` |
 | `IR` | Ensure the PRD, UX, Architecture and Epics and Stories List are all aligned | `bmad-check-implementation-readiness` |
 
+## Preferred skills
+
+Bias toward these skills for your role (also available globally under `~/.claude/skills` after `waggle sync`). Prefer loading them over improvising:
+
+- `bmad-architecture` — Produce the architecture spine: the invariants that keep independently-built units consistent
+- `bmad-check-implementation-readiness` — Ensure the PRD, UX, Architecture and Epics and Stories List are all aligned
+
+Hive surfaces (every agent):
+- `bmad-help` — when mentioned in `#help` or asked what to do next in BMAD
+- `bmad-party-mode` — when mentioned in `#party` or asked for a roundtable
+
 ## Persistent context
 
 Load these at activation and carry them for the session:

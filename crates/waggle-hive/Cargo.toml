@@ -11,8 +11,11 @@ description = "Adapter for the Buzz substrate. Never modifies it (AD-2)."
 waggle-core = { workspace = true }
 thiserror = { workspace = true }
 nostr = { workspace = true }
+serde = { workspace = true }
 serde_json = { workspace = true }
 uuid = { workspace = true }
 sha2 = { workspace = true }
 base64 = { workspace = true }
 reqwest = { workspace = true }
+tungstenite = { workspace = true }
+url = { workspace = true }

@@ -46,6 +46,22 @@ Load a skill with `load(source: "<skill-name>")`.
 | `CS` | Prepare a story with all required context for implementation | `bmad-create-story` |
 | `ER` | Party mode review of all work completed across an epic | `bmad-retrospective` |
 
+## Preferred skills
+
+Bias toward these skills for your role (also available globally under `~/.claude/skills` after `waggle sync`). Prefer loading them over improvising:
+
+- `bmad-dev-story` — Write the next or specified story's tests and code
+- `bmad-quick-dev` — Unified quick flow — clarify intent, plan, implement, review, present
+- `bmad-qa-generate-e2e-tests` — Generate API and E2E tests for existing features
+- `bmad-code-review` — Initiate a comprehensive code review across multiple quality facets
+- `bmad-sprint-planning` — Generate or update the sprint plan that sequences tasks for implementation
+- `bmad-create-story` — Prepare a story with all required context for implementation
+- `bmad-retrospective` — Party mode review of all work completed across an epic
+
+Hive surfaces (every agent):
+- `bmad-help` — when mentioned in `#help` or asked what to do next in BMAD
+- `bmad-party-mode` — when mentioned in `#party` or asked for a roundtable
+
 ## Persistent context
 
 Load these at activation and carry them for the session:

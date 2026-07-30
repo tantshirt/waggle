@@ -1,0 +1,28 @@
+{
+  "$schema": "https://open-plugin-spec.org/schema/v1/plugin.json",
+  "id": "dev.waggle.pack.cis",
+  "name": "waggle — cis",
+  "version": "0.2.1",
+  "description": "6 agents compiled from the cis module of a BMAD Method installation.",
+  "author": "The waggle contributors",
+  "license": "Apache-2.0",
+  "personas": [
+    "agents/bmad-cis-agent-brainstorming-coach.persona.md",
+    "agents/bmad-cis-agent-creative-problem-solver.persona.md",
+    "agents/bmad-cis-agent-design-thinking-coach.persona.md",
+    "agents/bmad-cis-agent-innovation-strategist.persona.md",
+    "agents/bmad-cis-agent-presentation-master.persona.md",
+    "agents/bmad-cis-agent-storyteller.persona.md"
+  ],
+  "pack_instructions": "instructions.md",
+  "defaults": {
+    "triggers": {
+      "mentions": true,
+      "keywords": [],
+      "all_messages": false
+    },
+    "subscribe": [],
+    "thread_replies": true,
+    "broadcast_replies": false
+  }
+}

@@ -1,0 +1,20 @@
+[
+  {
+    "name": "gds-design",
+    "description": "Game path — GDD and game design artifacts.",
+    "channel_type": "forum",
+    "visibility": "open",
+    "stable_name": true,
+    "include_module_agents": true,
+    "canvas_template": "# Game Design\n\n## Continue\n\n| | |\n|---|---|\n| **Path** | Game |\n| **Purpose** | GDD and game design artifacts |\n| **Usually next** | `#gds-production` |\n| **Help** | `@mention` + ask for BMAD Help anytime |\n\n## GDD outline\n\n## Pillars\n\n## Systems\n\n| System | Status | Owner |\n|---|---|---|\n"
+  },
+  {
+    "name": "gds-production",
+    "description": "Game path — production and implementation track.",
+    "channel_type": "stream",
+    "visibility": "open",
+    "stable_name": true,
+    "include_module_agents": true,
+    "canvas_template": "# Game Production\n\n## Continue\n\n| | |\n|---|---|\n| **Path** | Game |\n| **Purpose** | Production / implementation track |\n| **Usually next** | Testing `#test-strategy` → `#gate` when ready to prove |\n| **Help** | `@mention` + ask for BMAD Help anytime |\n\n## Milestones\n\n## Builds / vertical slices\n\n| Slice | Status | Notes |\n|---|---|---|\n"
+  }
+]

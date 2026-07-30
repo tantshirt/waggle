@@ -159,7 +159,7 @@ mapping spec, event-kind choices, keypair management, and gate firing.
 |---|---|---|
 | FR-15/17/18 full artifact + handoff chain | Project owner | Pilot compiles clean (SM-1) |
 | FR-18 portable patch events specifically | Project owner | Pilot lands early — flagged `[NOTE FOR PM]` in PRD §6.2 as the clearest demonstration of the portability claim |
-| `cis`, `gds`, `wds` module support | Project owner | SM-5 demonstrated on a second module |
+| `cis`, `gds`, `wds` module support | Project owner | **Done** — full hive mirror (`waggle sync`, phase rooms) |
 | Module publish/install as signed events | Project owner | Module-builder epic reached |
 | Multi-hive operation | Project owner | Second deployment demanded by a real user |
 | Upstream documentation PR for persona pack schema | Project owner | OQ-3 research complete |

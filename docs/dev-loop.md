@@ -83,44 +83,28 @@ spine especially, since AD-1 … AD-20 bind every story after it.
 
 ---
 
-## Where the loop stopped (2026-07-29)
+## Where the loop stopped (2026-07-29) → closed (2026-07-29 evening)
 
-Epic 1 ran to the end of what is reachable without external credentials or a publishing
-decision. Current state is in `docs/implementation-artifacts/sprint-status.yaml`; this
-section records *why* each unfinished story is unfinished, so the next session does not
-re-derive it.
+All three epics are **done**. Status of record:
+`docs/implementation-artifacts/sprint-status.yaml`. The table below is historical
+context for *why* stories stalled mid-flight; do not treat it as current status.
 
-| Story | State | Why |
+| Story | Final | Notes |
 |---|---|---|
-| 1.1 walking skeleton | **done** | — |
-| 1.2 pack contract | **done** | Rescoped mid-flight; the contract was documented, not missing |
-| 1.3 CI-built image | backlog | **Needs a decision:** publishing images to a public registry is outward-facing |
-| 1.4 version preflight | **done** | — |
-| 1.5 agent identity | in-progress | Provisioning + profile done; `add-member` needs a stable relay signing key |
-| 1.6 compile persona pack | **done** | SM-1 achieved |
-| 1.7 agent as hive member | in-progress | Profile done; a live turn needs an agent runtime + LLM credentials |
-| 1.8 compile the gate | **done** | Fires end to end on a real relay |
-| 1.9 approve + reconstruct | in-progress | Mechanics proven; the verdict was published by hand, not generated |
+| 1.1–1.2, 1.4, 1.6, 1.8–1.9 | **done** | — |
+| 1.3 pinned image | **done** | Rescoped: pull `ghcr.io/block/buzz` by digest (`deploy/compose/`). UP-08 withdrawn; AD-17 is pull-only |
+| 1.5 agent identity | **done** | `waggle identity register` → `buzz-admin add-member` (needs `BUZZ_RELAY_PRIVATE_KEY`) |
+| 1.7 agent as hive member | **done** | `waggle runtime emit` + `publish-agent --persona` (kind:30177). Live @mention reply still needs ACP + LLM credentials |
+| Epic 2 | **done** | SM-5 achieved (`bmm` compiles with zero compiler changes) |
+| Epic 3 / 3.2 | **done** | Oversized artifacts via Blossom `PUT /upload` + hash reference (UP-16 withdrawn) |
 
-### The three unblocks
+### Operator residual (not a code gap)
 
-1. **LLM provider credentials** + an ACP runtime (`goose` or a built `buzz-agent`) on
-   PATH. Finishes 1.7 and 1.9 properly. `buzz-acp` reads `BUZZ_ACP_AGENT_COMMAND`;
-   model selection projects to `GOOSE_PROVIDER` / `GOOSE_MODEL`.
-2. **A decision on publishing container images.** Unblocks 1.3 and AD-17.
-3. **`BUZZ_RELAY_PRIVATE_KEY`** set on the relay, then restart. Unblocks 1.5's
-   `add-member`. Low urgency: the pubkey allowlist is off by default, so agents
-   authenticate and publish without it.
+**LLM provider credentials** + an ACP runtime (`goose` or a built `buzz-agent`) on
+PATH. Enables a live conversational turn. `buzz-acp` reads `BUZZ_ACP_AGENT_COMMAND`;
+model selection projects to `GOOSE_PROVIDER` / `GOOSE_MODEL`. Runtime config is emitted
+by `waggle runtime emit` and lists the required env vars.
 
-### What is genuinely next, needing nothing
-
-**Epic 2.** The compiler already has no module-specific branches (AD-16, asserted), so
-compiling a second module is the cheapest way to test SM-5 — and Story 1.2's finding
-that BMAD skills *are* Buzz pack skills means Epic 2 should be re-estimated downward
-before it is scheduled.
-
-Also outstanding: the **reviewer gates skipped on the PRD and the architecture spine**
-while subagents were unavailable. Both are logged as overrides in their memlogs. The
-spine's gate is worth running before Epic 2, since `AD-1`…`AD-20` bind everything after
-it — and this project has already had two tests pass for the wrong reason, which is
-exactly the class of thing an independent reviewer catches.
+Also outstanding historically: the **reviewer gates skipped on the PRD and the
+architecture spine** while subagents were unavailable (logged as overrides in their
+memlogs). Worth a pass now that the spine's `AD-1`…`AD-20` bind the shipped code.

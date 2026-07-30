@@ -1,0 +1,415 @@
+[
+  {
+    "name": "architecture",
+    "description": "Software path — architecture and solutioning.",
+    "channel_type": "forum",
+    "visibility": "open",
+    "canvas_template": "# Architecture\n\n## Continue\n\n| | |\n|---|---|\n| **Path** | Software |\n| **Purpose** | Solutioning — trade-offs over verdicts |\n| **Usually next** | `#ux-design` (if UX needed) or `#story` |\n| **Help** | `@mention` + ask for BMAD Help anytime |\n\n## Decisions\n\n| ID | Decision | Status | Rationale |\n|---|---|---|---|\n\n## Constraints\n\n## Open trade-offs\n",
+    "agents": {
+      "personas": [
+        {
+          "personaId": "bmad-agent-architect"
+        },
+        {
+          "personaId": "bmad-agent-dev"
+        },
+        {
+          "personaId": "bmad-agent-pm"
+        }
+      ],
+      "teams": []
+    }
+  },
+  {
+    "name": "bmb-workshop",
+    "description": "Builder path — author custom agents, workflows, and modules.",
+    "channel_type": "stream",
+    "visibility": "open",
+    "canvas_template": "# Builder Workshop\n\n## Continue\n\n| | |\n|---|---|\n| **Path** | Builder |\n| **Purpose** | Author custom agents, workflows, and modules |\n| **Usually next** | Validate against BMB standards; `#help` for method routing |\n| **Help** | `@mention` + ask for BMAD Help anytime |\n\n## What we're building\n\n## Checklist\n\n- [ ] Agent / workflow sketched\n- [ ] customize.toml drafted\n- [ ] Validated against BMB standards\n",
+    "agents": {
+      "personas": [],
+      "teams": []
+    }
+  },
+  {
+    "name": "gate",
+    "description": "Testing path — release gate verdicts and human approvals.",
+    "channel_type": "stream",
+    "visibility": "open",
+    "canvas_template": "# Gate\n\n## Continue\n\n| | |\n|---|---|\n| **Path** | Testing |\n| **Purpose** | Release gate verdicts and human approvals |\n| **Usually next** | After ✅ — continue the active Software/Game path, or `#help` |\n| **Help** | `@mention` + ask for BMAD Help anytime |\n\n## Active verdicts\n\n| Verdict | Priority | Status | Approver | Event |\n|---|---|---|---|---|\n\nHuman approval is a ✅ reaction on the verdict event. Agents publish; they never self-approve.\n",
+    "agents": {
+      "personas": [
+        {
+          "personaId": "bmad-agent-architect"
+        },
+        {
+          "personaId": "bmad-agent-dev"
+        },
+        {
+          "personaId": "bmad-agent-pm"
+        },
+        {
+          "personaId": "bmad-tea"
+        }
+      ],
+      "teams": []
+    }
+  },
+  {
+    "name": "gds-design",
+    "description": "Game path — GDD and game design artifacts.",
+    "channel_type": "forum",
+    "visibility": "open",
+    "canvas_template": "# Game Design\n\n## Continue\n\n| | |\n|---|---|\n| **Path** | Game |\n| **Purpose** | GDD and game design artifacts |\n| **Usually next** | `#gds-production` |\n| **Help** | `@mention` + ask for BMAD Help anytime |\n\n## GDD outline\n\n## Pillars\n\n## Systems\n\n| System | Status | Owner |\n|---|---|---|\n",
+    "agents": {
+      "personas": [
+        {
+          "personaId": "gds-agent-game-architect"
+        },
+        {
+          "personaId": "gds-agent-game-designer"
+        },
+        {
+          "personaId": "gds-agent-game-dev"
+        },
+        {
+          "personaId": "gds-agent-game-solo-dev"
+        },
+        {
+          "personaId": "gds-agent-tech-writer"
+        }
+      ],
+      "teams": []
+    }
+  },
+  {
+    "name": "gds-production",
+    "description": "Game path — production and implementation track.",
+    "channel_type": "stream",
+    "visibility": "open",
+    "canvas_template": "# Game Production\n\n## Continue\n\n| | |\n|---|---|\n| **Path** | Game |\n| **Purpose** | Production / implementation track |\n| **Usually next** | Testing `#test-strategy` → `#gate` when ready to prove |\n| **Help** | `@mention` + ask for BMAD Help anytime |\n\n## Milestones\n\n## Builds / vertical slices\n\n| Slice | Status | Notes |\n|---|---|---|\n",
+    "agents": {
+      "personas": [
+        {
+          "personaId": "gds-agent-game-architect"
+        },
+        {
+          "personaId": "gds-agent-game-designer"
+        },
+        {
+          "personaId": "gds-agent-game-dev"
+        },
+        {
+          "personaId": "gds-agent-game-solo-dev"
+        },
+        {
+          "personaId": "gds-agent-tech-writer"
+        }
+      ],
+      "teams": []
+    }
+  },
+  {
+    "name": "help",
+    "description": "Hub — choose a path or ask BMAD Help what's next. Load bmad-help when mentioned.",
+    "channel_type": "stream",
+    "visibility": "open",
+    "canvas_template": "# BMAD Help\n\n**Waggle — powered by BMAD.** This room is the Desktop equivalent of slash-command `bmad-help`.\n\n## Get help anytime\n\nIn **any** room — not only here — `@mention` an agent with your goal, or ask\n\"what's next?\" / \"continue\" / **BH**. Agents load the `bmad-help` skill, pick up\nfrom where you left off, and route you to the next skill and room. They should\n**not** dump the full catalog.\n\n| Code | Skill | Purpose |\n|---|---|---|\n| BH | bmad-help | What's next in the method |\n| PM | bmad-party-mode | Multi-agent roundtable in `#party` |\n\n## Choose a path\n\nPick the journey that matches what you are doing. Then open that path's rooms.\n\n| Path | Do this | Rooms |\n|---|---|---|\n| **Software** | Build a product | `#planning` → `#architecture` → `#ux-design` → `#story` → `#implementation` → Testing |\n| **Game** | Build a game | `#gds-design` → `#gds-production` |\n| **Creative** | Ideate / brainstorm | `#ideation` (winners → Software `#planning`) |\n| **Builder** | Extend the method | `#bmb-workshop` |\n| **Testing** | Prove and gate | `#test-strategy` → `#gate` |\n\n## Hubs\n\n- `#help` — path chooser + BMAD Help (you are here)\n- `#party` — bring the cast together for a roundtable\n\nOr skip the table: describe your goal and `@mention` any agent.\n\n## Catalog appendix (from bmad-help.csv)\n\nPower-user reference. Prefer path chooser + asking an agent what's next.\n\n### 0-learning\n\n| Code | Skill | Name | Module |\n|---|---|---|---|\n| TMT | bmad-teach-me-testing | Teach Me Testing | Test Architecture Enterprise |\n\n### 0-wds-agents\n\n| Code | Skill | Name | Module |\n|---|---|---|---|\n| IDUN | bmad-wds-idun | Wake Idun | Web Design Studio |\n| SAGA | bmad-wds-saga | Wake Saga | Web Design Studio |\n| FREYA | bmad-wds-freya | Wake Freya | Web Design Studio |\n\n### 0-wds-pitch\n\n| Code | Skill | Name | Module |\n|---|---|---|---|\n| AS | bmad-wds-alignment | Alignment & Signoff | Web Design Studio |\n\n### 1-analysis\n\n| Code | Skill | Name | Module |\n|---|---|---|---|\n| BP | bmad-brainstorming | Brainstorm Project | BMad Method |\n| MR | bmad-market-research | Market Research | BMad Method |\n| DR | bmad-domain-research | Domain Research | BMad Method |\n| TR | bmad-technical-research | Technical Research | BMad Method |\n| CB | bmad-product-brief | Create Brief | BMad Method |\n| WB | bmad-prfaq | PRFAQ Challenge | BMad Method |\n\n### 1-preproduction\n\n| Code | Skill | Name | Module |\n|---|---|---|---|\n| BG | gds-brainstorm-game | Brainstorm Game | Game Dev Studio |\n| DR | gds-domain-research | Domain Research | Game Dev Studio |\n| GB | gds-create-game-brief | Game Brief | Game Dev Studio |\n\n### 1-wds-strategy\n\n| Code | Skill | Name | Module |\n|---|---|---|---|\n| PB | bmad-wds-project-brief | Project Brief | Web Design Studio |\n| TM | bmad-wds-trigger-mapping | Trigger Mapping | Web Design Studio |\n| PR | bmad-wds-platform-requirements | Platform Requirements | Web Design Studio |\n\n### 2-design\n\n| Code | Skill | Name | Module |\n|---|---|---|---|\n| GDD | gds-gdd | Game Design Document | Game Dev Studio |\n| ND | gds-create-narrative | Narrative Design | Game Dev Studio |\n| CU | gds-ux | Game UX Design | Game Dev Studio |\n| PRD | gds-prd | Game PRD | Game Dev Studio |\n\n### 2-planning\n\n| Code | Skill | Name | Module |\n|---|---|---|---|\n| PRD | bmad-prd | Create Edit and Review PRD | BMad Method |\n| CU | bmad-ux | Create UX | BMad Method |\n\n### 2-wds-design\n\n| Code | Skill | Name | Module |\n|---|---|---|---|\n| OS | bmad-wds-outline-scenarios | Outline Scenarios | Web Design Studio |\n| CS | bmad-wds-conceptual-sketching | Conceptual Sketching | Web Design Studio |\n| SB | bmad-wds-storyboarding | Storyboarding | Web Design Studio |\n| SP | bmad-wds-conceptual-specs | Conceptual Specifications | Web Design Studio |\n| FI | bmad-wds-functional-components | Functional Components | Web Design Studio |\n| VD | bmad-wds-visual-design | Visual Design | Web Design Studio |\n| DS | bmad-wds-design-system | Design System | Web Design Studio |\n| DD | bmad-wds-design-delivery | Design Delivery | Web Design Studio |\n\n### 3-solutioning\n\n| Code | Skill | Name | Module |\n|---|---|---|---|\n| CA | bmad-architecture | Architecture | BMad Method |\n| CE | bmad-create-epics-and-stories | Create Epics and Stories | BMad Method |\n| IR | bmad-check-implementation-readiness | Check Implementation Readiness | BMad Method |\n| TD | bmad-testarch-test-design | Test Design | Test Architecture Enterprise |\n| TF | bmad-testarch-framework | Test Framework | Test Architecture Enterprise |\n| CI | bmad-testarch-ci | CI Setup | Test Architecture Enterprise |\n\n### 3-technical\n\n| Code | Skill | Name | Module |\n|---|---|---|---|\n| PC | gds-generate-project-context | Project Context | Game Dev Studio |\n| GA | gds-game-architecture | Game Architecture | Game Dev Studio |\n| CE | gds-create-epics-and-stories | Create Epics and Stories | Game Dev Studio |\n| IR | gds-check-implementation-readiness | Check Implementation Readiness | Game Dev Studio |\n| TF | gds-test-framework | Test Framework | Game Dev Studio |\n| TD | gds-test-design | Test Design | Game Dev Studio |\n\n### 3-wds-build\n\n| Code | Skill | Name | Module |\n|---|---|---|---|\n| AD | bmad-wds-agentic-development | Agentic Development | Web Design Studio |\n| AT | bmad-wds-usability-testing | Acceptance Testing | Web Design Studio |\n| PE | bmad-wds-product-evolution | Product Evolution | Web Design Studio |\n\n### 4-implementation\n\n| Code | Skill | Name | Module |\n|---|---|---|---|\n| SP | bmad-sprint-planning | Sprint Planning | BMad Method |\n| SS | bmad-sprint-status | Sprint Status | BMad Method |\n| CS | bmad-create-story | Create Story | BMad Method |\n| VS | bmad-create-story | Validate Story | BMad Method |\n| DS | bmad-dev-story | Dev Story | BMad Method |\n| CR | bmad-code-review | Code Review | BMad Method |\n| CK | bmad-checkpoint-preview | Checkpoint | BMad Method |\n| QA | bmad-qa-generate-e2e-tests | QA Automation Test | BMad Method |\n| ER | bmad-retrospective | Retrospective | BMad Method |\n| AT | bmad-testarch-atdd | ATDD | Test Architecture Enterprise |\n| TA | bmad-testarch-automate | Test Automation | Test Architecture Enterprise |\n| RV | bmad-testarch-test-review | Test Review | Test Architecture Enterprise |\n| NR | bmad-testarch-nfr | NFR Evidence Audit | Test Architecture Enterprise |\n| TR | bmad-testarch-trace | Traceability | Test Architecture Enterprise |\n\n### 4-production\n\n| Code | Skill | Name | Module |\n|---|---|---|---|\n| SP | gds-sprint-planning | Sprint Planning | Game Dev Studio |\n| SS | gds-sprint-status | Sprint Status | Game Dev Studio |\n| CS | gds-create-story | Create Story | Game Dev Studio |\n| DS | gds-dev-story | Dev Story | Game Dev Studio |\n| CR | gds-code-review | Code Review | Game Dev Studio |\n| ER | gds-retrospective | Retrospective | Game Dev Studio |\n| IN | gds-investigate | Investigate | Game Dev Studio |\n\n### anytime\n\n| Code | Skill | Name | Module |\n|---|---|---|---|\n| SB | bmad-bmb-setup | Setup Builder Module | BMad Builder |\n| BA | bmad-agent-builder | Build an Agent | BMad Builder |\n| AA | bmad-agent-builder | Analyze an Agent | BMad Builder |\n| BW | bmad-workflow-builder | Build a Workflow | BMad Builder |\n| AW | bmad-workflow-builder | Analyze a Workflow | BMad Builder |\n| CW | bmad-workflow-builder | Convert a Skill | BMad Builder |\n| IM | bmad-module-builder | Ideate Module | BMad Builder |\n| CM | bmad-module-builder | Create Module | BMad Builder |\n| VM | bmad-module-builder | Validate Module | BMad Builder |\n| DP | bmad-document-project | Document Project | BMad Method |\n| GPC | bmad-generate-project-context | Generate Project Context | BMad Method |\n| QQ | bmad-quick-dev | Quick Dev | BMad Method |\n| CC | bmad-correct-course | Correct Course | BMad Method |\n| WD | bmad-agent-tech-writer | Write Document | BMad Method |\n| US | bmad-agent-tech-writer | Update Standards | BMad Method |\n| MG | bmad-agent-tech-writer | Mermaid Generate | BMad Method |\n| VD | bmad-agent-tech-writer | Validate Document | BMad Method |\n| EC | bmad-agent-tech-writer | Explain Concept | BMad Method |\n| BSP | bmad-brainstorming | Brainstorming | Core |\n| PM | bmad-party-mode | Party Mode | Core |\n| BH | bmad-help | BMad Help | Core |\n| ID | bmad-index-docs | Index Docs | Core |\n| SD | bmad-shard-doc | Shard Document | Core |\n| EP | bmad-editorial-review-prose | Editorial Review - Prose | Core |\n| ES | bmad-editorial-review-structure | Editorial Review - Structure | Core |\n| AR | bmad-review-adversarial-general | Adversarial Review | Core |\n| ECH | bmad-review-edge-case-hunter | Edge Case Hunter Review | Core |\n| SP | bmad-spec | Spec | Core |\n| BC | bmad-customize | BMad Customize | Core |\n| FI | bmad-forge-idea | Forge Idea | Core |\n| IS | bmad-cis-innovation-strategy | Innovation Strategy | Creative Intelligence Suite |\n| PS | bmad-cis-problem-solving | Problem Solving | Creative Intelligence Suite |\n| DT | bmad-cis-design-thinking | Design Thinking | Creative Intelligence Suite |\n| BS | bmad-brainstorming | Brainstorming | Creative Intelligence Suite |\n| ST | bmad-cis-storytelling | Storytelling | Creative Intelligence Suite |\n| DP | gds-document-project | Document Project | Game Dev Studio |\n| QD | gds-quick-dev | Quick Dev | Game Dev Studio |\n| CC | gds-correct-course | Correct Course | Game Dev Studio |\n\n### gametest\n\n| Code | Skill | Name | Module |\n|---|---|---|---|\n| TA | gds-test-automate | Test Automate | Game Dev Studio |\n| ES | gds-e2e-scaffold | E2E Scaffold | Game Dev Studio |\n| PP | gds-playtest-plan | Playtest Plan | Game Dev Studio |\n| PT | gds-performance-test | Performance Test | Game Dev Studio |\n| TR | gds-test-review | Test Review | Game Dev Studio |\n\n",
+    "agents": {
+      "personas": [
+        {
+          "personaId": "bmad-agent-analyst"
+        },
+        {
+          "personaId": "bmad-agent-architect"
+        },
+        {
+          "personaId": "bmad-agent-dev"
+        },
+        {
+          "personaId": "bmad-agent-pm"
+        },
+        {
+          "personaId": "bmad-agent-tech-writer"
+        },
+        {
+          "personaId": "bmad-agent-ux-designer"
+        },
+        {
+          "personaId": "bmad-cis-agent-brainstorming-coach"
+        },
+        {
+          "personaId": "bmad-cis-agent-creative-problem-solver"
+        },
+        {
+          "personaId": "bmad-cis-agent-design-thinking-coach"
+        },
+        {
+          "personaId": "bmad-cis-agent-innovation-strategist"
+        },
+        {
+          "personaId": "bmad-cis-agent-presentation-master"
+        },
+        {
+          "personaId": "bmad-cis-agent-storyteller"
+        },
+        {
+          "personaId": "bmad-tea"
+        },
+        {
+          "personaId": "gds-agent-game-architect"
+        },
+        {
+          "personaId": "gds-agent-game-designer"
+        },
+        {
+          "personaId": "gds-agent-game-dev"
+        },
+        {
+          "personaId": "gds-agent-game-solo-dev"
+        },
+        {
+          "personaId": "gds-agent-tech-writer"
+        },
+        {
+          "personaId": "wds-agent-freya-ux"
+        },
+        {
+          "personaId": "wds-agent-mimir-builder"
+        },
+        {
+          "personaId": "wds-agent-saga-analyst"
+        }
+      ],
+      "teams": []
+    }
+  },
+  {
+    "name": "ideation",
+    "description": "Creative path — brainstorming, innovation, design thinking.",
+    "channel_type": "stream",
+    "visibility": "open",
+    "canvas_template": "# Ideation\n\n## Continue\n\n| | |\n|---|---|\n| **Path** | Creative |\n| **Purpose** | Brainstorming, innovation, design thinking |\n| **Usually next** | Move winners to Software `#planning`; roundtable in `#party` |\n| **Help** | `@mention` + ask for BMAD Help anytime |\n\n## Prompt / opportunity\n\n## Divergent notes\n\n## Convergent candidates\n\n| Idea | Why it matters | Next |\n|---|---|---|\n\nMove winners into `#planning`. Use `#party` when the whole cast should weigh in.\n",
+    "agents": {
+      "personas": [
+        {
+          "personaId": "bmad-agent-analyst"
+        },
+        {
+          "personaId": "bmad-cis-agent-brainstorming-coach"
+        },
+        {
+          "personaId": "bmad-cis-agent-creative-problem-solver"
+        },
+        {
+          "personaId": "bmad-cis-agent-design-thinking-coach"
+        },
+        {
+          "personaId": "bmad-cis-agent-innovation-strategist"
+        },
+        {
+          "personaId": "bmad-cis-agent-presentation-master"
+        },
+        {
+          "personaId": "bmad-cis-agent-storyteller"
+        }
+      ],
+      "teams": []
+    }
+  },
+  {
+    "name": "implementation",
+    "description": "Software path — build the story.",
+    "channel_type": "stream",
+    "visibility": "open",
+    "canvas_template": "# Implementation\n\n## Continue\n\n| | |\n|---|---|\n| **Path** | Software |\n| **Purpose** | Build — patches, quick-dev, code review |\n| **Usually next** | Testing `#test-strategy` → `#gate` |\n| **Help** | `@mention` + ask for BMAD Help anytime |\n\n## Current story\n\n## Patches / PRs\n\n| Change | Status | Event |\n|---|---|---|\n\n## Notes\n",
+    "agents": {
+      "personas": [
+        {
+          "personaId": "bmad-agent-architect"
+        },
+        {
+          "personaId": "bmad-agent-dev"
+        },
+        {
+          "personaId": "bmad-agent-pm"
+        }
+      ],
+      "teams": []
+    }
+  },
+  {
+    "name": "party",
+    "description": "Hub — multi-agent roundtable. Load bmad-party-mode.",
+    "channel_type": "stream",
+    "visibility": "open",
+    "canvas_template": "# Party Mode\n\n## Continue\n\n| | |\n|---|---|\n| **Path** | Hub (any path) |\n| **Purpose** | Bring the cast together for a roundtable |\n| **Usually next** | Decisions that need a gate → `#gate`; method routing → `#help` |\n| **Help** | Stuck on process? `@mention` + ask for BMAD Help |\n\nBring the cast together. `@mention` who should speak, or ask the room to deliberate.\n\nLoad `bmad-party-mode` for facilitation rules. Idle agents wake on first @mention (lazy ACP).\n\n## Ground rules\n\n- One conversation, many signed voices\n- Disagreements stay in the log\n- Decisions that need a gate move to `#gate`\n",
+    "agents": {
+      "personas": [
+        {
+          "personaId": "bmad-agent-analyst"
+        },
+        {
+          "personaId": "bmad-agent-architect"
+        },
+        {
+          "personaId": "bmad-agent-dev"
+        },
+        {
+          "personaId": "bmad-agent-pm"
+        },
+        {
+          "personaId": "bmad-agent-tech-writer"
+        },
+        {
+          "personaId": "bmad-agent-ux-designer"
+        },
+        {
+          "personaId": "bmad-cis-agent-brainstorming-coach"
+        },
+        {
+          "personaId": "bmad-cis-agent-creative-problem-solver"
+        },
+        {
+          "personaId": "bmad-cis-agent-design-thinking-coach"
+        },
+        {
+          "personaId": "bmad-cis-agent-innovation-strategist"
+        },
+        {
+          "personaId": "bmad-cis-agent-presentation-master"
+        },
+        {
+          "personaId": "bmad-cis-agent-storyteller"
+        },
+        {
+          "personaId": "bmad-tea"
+        },
+        {
+          "personaId": "gds-agent-game-architect"
+        },
+        {
+          "personaId": "gds-agent-game-designer"
+        },
+        {
+          "personaId": "gds-agent-game-dev"
+        },
+        {
+          "personaId": "gds-agent-game-solo-dev"
+        },
+        {
+          "personaId": "gds-agent-tech-writer"
+        },
+        {
+          "personaId": "wds-agent-freya-ux"
+        },
+        {
+          "personaId": "wds-agent-mimir-builder"
+        },
+        {
+          "personaId": "wds-agent-saga-analyst"
+        }
+      ],
+      "teams": []
+    }
+  },
+  {
+    "name": "planning",
+    "description": "Software path — analysis, product brief, PRD.",
+    "channel_type": "forum",
+    "visibility": "open",
+    "canvas_template": "# Planning\n\n## Continue\n\n| | |\n|---|---|\n| **Path** | Software |\n| **Purpose** | Analysis, product brief, PRD |\n| **Usually next** | `#architecture` |\n| **Help** | `@mention` + ask for BMAD Help anytime |\n\n## Current phase\n\n_analysis / planning / solutioning / implementation_\n\n## Artifacts\n\n| Artifact | Status | Owner | Event |\n|---|---|---|---|\n| Product brief |  |  |  |\n| PRD |  |  |  |\n| Architecture |  |  |  |\n\n## Open questions\n\nUnknowns recorded here are fine. Unknowns papered over with a guess are not.\n",
+    "agents": {
+      "personas": [
+        {
+          "personaId": "bmad-agent-analyst"
+        },
+        {
+          "personaId": "bmad-agent-pm"
+        },
+        {
+          "personaId": "bmad-agent-tech-writer"
+        }
+      ],
+      "teams": []
+    }
+  },
+  {
+    "name": "story",
+    "description": "Software path — one story end to end.",
+    "channel_type": "stream",
+    "visibility": "open",
+    "canvas_template": "# Story\n\n## Continue\n\n| | |\n|---|---|\n| **Path** | Software |\n| **Purpose** | One story: spec, handoffs, build, its gate |\n| **Usually next** | `#implementation`, then Testing `#test-strategy` |\n| **Help** | `@mention` + ask for BMAD Help anytime |\n\n## Story\n\nAs a _persona_,\nI want _capability_,\nSo that _value_.\n\n## Acceptance criteria\n\n**Given** _precondition_\n**When** _action_\n**Then** _outcome_\n\n## Context\n\nWhich requirements this realizes, and which architecture decisions bind it.\n\n## Handoffs\n\n| From | To | Artifact | When |\n|---|---|---|---|\n\nEach handoff is a signed event in this channel. This table is a reading aid, not the record.\n\n## Definition of done\n\n- [ ] Acceptance criteria met and demonstrated\n- [ ] Tests written and passing\n- [ ] Gate verdict published and approved\n",
+    "agents": {
+      "personas": [
+        {
+          "personaId": "bmad-agent-analyst"
+        },
+        {
+          "personaId": "bmad-agent-architect"
+        },
+        {
+          "personaId": "bmad-agent-dev"
+        },
+        {
+          "personaId": "bmad-agent-pm"
+        },
+        {
+          "personaId": "bmad-agent-tech-writer"
+        },
+        {
+          "personaId": "bmad-agent-ux-designer"
+        }
+      ],
+      "teams": []
+    }
+  },
+  {
+    "name": "test-strategy",
+    "description": "Testing path — risk-based test strategy and coverage.",
+    "channel_type": "stream",
+    "visibility": "open",
+    "canvas_template": "# Test strategy\n\n## Continue\n\n| | |\n|---|---|\n| **Path** | Testing |\n| **Purpose** | Risk-based test strategy and coverage |\n| **Usually next** | `#gate` with a signed verdict |\n| **Help** | `@mention` + ask for BMAD Help anytime |\n\n> Owned by the Test Architect. A gate decision without evidence in this document is not a gate decision.\n\n## Scope\n\nWhat is being gated, and at what altitude (story / epic / release).\n\n## Risk assessment\n\n| Area | Priority | Risk | Evidence |\n|---|---|---|---|\n|  | P1 |  |  |\n\nPriorities are `P0`-`P3`. Depth of testing scales with impact, not with habit.\n\n## Coverage\n\n| Requirement | Level | Test | Status |\n|---|---|---|---|\n|  | unit / integration / e2e |  |  |\n\nPrefer the lowest level that can catch the failure.\n\n## NFR evidence\n\n| Attribute | Target | Measured | Evidence |\n|---|---|---|---|\n| performance |  |  |  |\n| security |  |  |  |\n| reliability |  |  |  |\n\n## Gate\n\n**Verdict:** _pending_ — one of `PASS`, `CONCERNS`, `FAIL`, `WAIVED`.\n\n`CONCERNS` and `WAIVED` require a written rationale.\n\n**Approved by:** _a human reaction on the verdict event; the agent does not approve its own gate._\n",
+    "agents": {
+      "personas": [
+        {
+          "personaId": "bmad-agent-dev"
+        },
+        {
+          "personaId": "bmad-agent-pm"
+        },
+        {
+          "personaId": "bmad-tea"
+        }
+      ],
+      "teams": []
+    }
+  },
+  {
+    "name": "ux-design",
+    "description": "Software path — UX and design specs (BMM + WDS when installed).",
+    "channel_type": "forum",
+    "visibility": "open",
+    "canvas_template": "# UX / Design\n\n## Continue\n\n| | |\n|---|---|\n| **Path** | Software |\n| **Purpose** | UX and design-spec canvases |\n| **Usually next** | `#story` |\n| **Help** | `@mention` + ask for BMAD Help anytime |\n\n## Users and jobs\n\n## Flows\n\n## Specs\n\n| Screen / flow | Status | Owner |\n|---|---|---|\n",
+    "agents": {
+      "personas": [
+        {
+          "personaId": "bmad-agent-pm"
+        },
+        {
+          "personaId": "bmad-agent-ux-designer"
+        },
+        {
+          "personaId": "wds-agent-freya-ux"
+        },
+        {
+          "personaId": "wds-agent-mimir-builder"
+        },
+        {
+          "personaId": "wds-agent-saga-analyst"
+        }
+      ],
+      "teams": []
+    }
+  }
+]
